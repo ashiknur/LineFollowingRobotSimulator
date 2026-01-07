@@ -1,0 +1,57 @@
+# =========================
+# Visual Studio
+# =========================
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# =========================
+# Build folders
+# =========================
+Debug/
+Release/
+x64/
+x86/
+build/
+out/
+
+# =========================
+# Compiled binaries
+# =========================
+*.exe
+*.dll
+*.ilk
+*.pdb
+*.obj
+*.idb
+*.lib
+*.exp
+
+# =========================
+# Logs & temporary files
+# =========================
+*.log
+*.tlog
+*.lastbuildstate
+
+# =========================
+# CMake (if used later)
+# =========================
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# =========================
+# SFML / vcpkg runtime copies
+# =========================
+vcpkg_installed/
+*.applocal.log
+
+# =========================
+# OS files
+# =========================
+Thumbs.db
+.DS_Store
