@@ -57,7 +57,7 @@ int main()
 
     // ---------- ROBOT SPRITE ----------
     sf::Texture robotTexture;
-    if (!robotTexture.loadFromFile("D:\\Final Year Project\\LineFollowingRobotSimulator\\x64\\Debug\\lfr body.png"))
+    if (!robotTexture.loadFromFile("D:\\Final Year Project\\LineFollowingRobotSimulator\\lfr body.png"))
     {
         std::cerr << "Failed to load LFR body.png\n";
         return -1;
