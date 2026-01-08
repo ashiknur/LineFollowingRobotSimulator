@@ -134,6 +134,13 @@ int main()
         // ---------- DRAW LINE ----------
         if (drawing && linePoints.size() > 1)
         {
+            // Fix: Draw a circle at the very first point to round the start of the line
+            sf::CircleShape startJoint(LINE_WIDTH / 2.f);
+            startJoint.setOrigin({ LINE_WIDTH / 2.f, LINE_WIDTH / 2.f });
+            startJoint.setFillColor(sf::Color::Black);
+            startJoint.setPosition(linePoints[0]);
+            canvas.draw(startJoint);
+
             for (size_t i = 1; i < linePoints.size(); ++i)
             {
                 sf::Vector2f p0 = linePoints[i - 1];
@@ -146,19 +153,27 @@ int main()
                 sf::Vector2f unitDir = direction / length;
                 sf::Vector2f normal(-unitDir.y, unitDir.x);
 
+                // --- DRAW THE SEGMENT (RECTANGLE) ---
                 sf::Vertex quad[4];
                 quad[0].position = p0 + normal * (LINE_WIDTH * 0.5f);
                 quad[1].position = p1 + normal * (LINE_WIDTH * 0.5f);
                 quad[2].position = p1 - normal * (LINE_WIDTH * 0.5f);
                 quad[3].position = p0 - normal * (LINE_WIDTH * 0.5f);
 
-                for (auto& v : quad)
-                    v.color = sf::Color::Black;
+                for (auto& v : quad) v.color = sf::Color::Black;
 
+                // Note: TriangleFan is usually safer for this vertex order (perimeter), 
+                // but Strip works here too because of the specific vertex layout.
                 canvas.draw(quad, 4, sf::PrimitiveType::TriangleFan);
+
+                // --- DRAW THE JOINT (CIRCLE) ---
+                sf::CircleShape joint(LINE_WIDTH / 2.f);
+                joint.setOrigin({ LINE_WIDTH / 2.f, LINE_WIDTH / 2.f });
+                joint.setFillColor(sf::Color::Black);
+                joint.setPosition(p1); // Draw circle at the end of this segment
+                canvas.draw(joint);
             }
             canvas.display();
-
         }
 
 
@@ -213,6 +228,10 @@ int main()
 
             float left = baseSpeed - correction * 50.f;
             float right = baseSpeed + correction * 50.f;
+            if (left < 0.f) left = 0.f;
+            if (right < 0.f) right = 0.f;
+            if (left > 255.f) left = 255.f;
+            if (right > 255.f) right = 255.f;
 
             float avg = (left + right) * 0.5f;
             float rot = (right - left) * 0.05f;
@@ -222,7 +241,7 @@ int main()
             if (robotAngle < 0.f)   robotAngle += 360.f;
             robotPos.x += avg * std::cos(deg2rad(robotAngle)) * dt;
             robotPos.y += avg * std::sin(deg2rad(robotAngle)) * dt;
-            std::cout << "Error: " << error << " Correction: " << correction << " Left: " << left << " Right: " << right << "\n";
+            //std::cout << "Error: " << error << " Correction: " << correction << " Left: " << left << " Right: " << right << "\n";
         }
 
         //std::cout << "---------------------------\n";
@@ -244,7 +263,7 @@ int main()
         if (rta >= 360.f) rta -= 360.f;
         if (rta < 0.f)   rta += 360.f;
         robotSprite.setRotation(sf::degrees(rta));
-        std::cout << std::fixed << std::setprecision(0) << robotAngle << " " << rta << " " << robotPos.x << " " << robotPos.y << std::endl;
+        //std::cout << std::fixed << std::setprecision(0) << robotAngle << " " << rta << " " << robotPos.x << " " << robotPos.y << std::endl;
         window.draw(robotSprite);
 
 
