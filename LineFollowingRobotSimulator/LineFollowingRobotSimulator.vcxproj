@@ -18,6 +18,28 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\Canvas.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\main.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\Motor.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\Robot.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\Sensor.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\UI.cpp" />
+    <ClCompile Include="..\..\..\TestLFR\TestLFR\UserCode.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\Canvas.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\config.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\Math.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\Motor.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\Robot.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\Sensor.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\UI.hpp" />
+    <ClInclude Include="..\..\..\TestLFR\TestLFR\UserCode.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\..\..\TestLFR\TestLFR\LFR body.png" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
@@ -126,9 +148,6 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <ClCompile Include="LineFollowingRobotSimulator.cpp" />
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
