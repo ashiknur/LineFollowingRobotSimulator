@@ -133,6 +133,7 @@
     <ClCompile Include="Motor.cpp" />
     <ClCompile Include="Robot.cpp" />
     <ClCompile Include="Sensor.cpp" />
+    <ClCompile Include="TextEditor.cpp" />
     <ClCompile Include="UserAPI.cpp" />
     <ClCompile Include="UserCode.cpp" />
     <ClCompile Include="UserMain.cpp" />
@@ -147,6 +148,7 @@
     <ClInclude Include="Robot.hpp" />
     <ClInclude Include="Sensor.hpp" />
     <ClInclude Include="SharedState.hpp" />
+    <ClInclude Include="TextEditor.hpp" />
     <ClInclude Include="UserAPI.hpp" />
     <ClInclude Include="UserCode.hpp" />
   </ItemGroup>

@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="LineFollowingRobotSimulator/LineFollowingRobotSimulator.vcxproj" />
+  <Project Path="LineFollowingRobotSimulator/LineFollowingRobotSimulator.vcxproj" Id="2cb9b30d-22e4-4703-979c-6f3b1d7cda4a" />
 </Solution>

@@ -1,65 +1,165 @@
 #include "Canvas.hpp"
 #include "config.hpp"
 #include <cmath>
+#include <algorithm>
 
+// ---------------------------------------------------------------------------
 Canvas::Canvas()
-    : canvas(sf::Vector2u{ WIDTH, HEIGHT })
+    : rt_(sf::Vector2u{ WIDTH, HEIGHT })
 {
-    canvas.clear(sf::Color::White);
-    canvas.display();
+    rt_.clear(sf::Color::White);
+    rt_.display();
 }
 
-void Canvas::handleDrawing(
-    bool drawing,
-    const std::vector<sf::Vector2f>& points
-)
+// ---------------------------------------------------------------------------
+void Canvas::clear()
 {
-    if (!drawing || points.size() < 2)
-        return;
+    rt_.clear(sf::Color::White);
+    rt_.display();
+    stroke_.clear();
+    dragging_ = false;
+}
 
-    sf::CircleShape start(LINE_WIDTH / 2.f);
-    start.setOrigin(sf::Vector2f{ LINE_WIDTH / 2.f, LINE_WIDTH / 2.f });
-    start.setFillColor(sf::Color::Black);
-    start.setPosition(points[0]);
-    canvas.draw(start);
+// ---------------------------------------------------------------------------
+void Canvas::mousePressed(sf::Vector2f pos)
+{
+    dragging_ = true;
+    dragStart_ = pos;
+    dragCur_ = pos;
+    stroke_.clear();
+    stroke_.push_back(pos);
 
-    for (size_t i = 1; i < points.size(); ++i)
+    // Freehand / eraser: start dot
+    if (tool == DrawTool::Freehand || tool == DrawTool::Eraser)
     {
-        sf::Vector2f p0 = points[i - 1];
-        sf::Vector2f p1 = points[i];
+        sf::Color col = (tool == DrawTool::Eraser) ? sf::Color::White : penColor;
+        sf::CircleShape dot(brushSize / 2.f);
+        dot.setOrigin({ brushSize / 2.f, brushSize / 2.f });
+        dot.setFillColor(col);
+        dot.setPosition(pos);
+        rt_.draw(dot);
+        rt_.display();
+    }
+}
 
-        sf::Vector2f d = p1 - p0;
-        float len = std::sqrt(d.x * d.x + d.y * d.y);
-        if (len == 0) continue;
+// ---------------------------------------------------------------------------
+void Canvas::mouseMoved(sf::Vector2f pos)
+{
+    if (!dragging_) return;
+    dragCur_ = pos;
 
-        sf::Vector2f u = d / len;
-        sf::Vector2f n(-u.y, u.x);
+    if (tool == DrawTool::Freehand || tool == DrawTool::Eraser)
+    {
+        sf::Color col = (tool == DrawTool::Eraser) ? sf::Color::White : penColor;
+        if (!stroke_.empty())
+            drawThickSegment(stroke_.back(), pos, col);
+        stroke_.push_back(pos);
+        rt_.display();
+    }
+    // For StraightLine / FilledRect / CircleBorder the preview is rendered
+    // by AppUI's DrawList overlay; nothing is committed yet.
+}
 
-        sf::Vertex quad[4];
-        quad[0].position = p0 + n * (LINE_WIDTH / 2.f);
-        quad[1].position = p1 + n * (LINE_WIDTH / 2.f);
-        quad[2].position = p1 - n * (LINE_WIDTH / 2.f);
-        quad[3].position = p0 - n * (LINE_WIDTH / 2.f);
+// ---------------------------------------------------------------------------
+void Canvas::mouseReleased(sf::Vector2f pos)
+{
+    if (!dragging_) return;
+    dragCur_ = pos;
+    dragging_ = false;
 
-        for (auto& v : quad) v.color = sf::Color::Black;
-        canvas.draw(quad, 4, sf::PrimitiveType::TriangleFan);
+    switch (tool)
+    {
+    case DrawTool::Freehand:
+    case DrawTool::Eraser:
+        // Already drawn incrementally – nothing to commit.
+        break;
 
-        sf::CircleShape joint(LINE_WIDTH / 2.f);
-        joint.setOrigin(sf::Vector2f{ LINE_WIDTH / 2.f, LINE_WIDTH / 2.f });
-        joint.setFillColor(sf::Color::Black);
-        joint.setPosition(p1);
-        canvas.draw(joint);
+    case DrawTool::StraightLine:
+        drawThickSegment(dragStart_, pos, penColor);
+        break;
+
+    case DrawTool::FilledRect:
+        drawFilledRect(dragStart_, pos, penColor);
+        break;
+
+    case DrawTool::CircleBorder: {
+        float dx = pos.x - dragStart_.x;
+        float dy = pos.y - dragStart_.y;
+        float r = std::sqrt(dx * dx + dy * dy);
+        drawCircleBorder(dragStart_, r, penColor);
+        break;
+    }
     }
 
-    canvas.display();
+    rt_.display();
 }
 
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+void Canvas::drawThickSegment(sf::Vector2f p0, sf::Vector2f p1, sf::Color col)
+{
+    sf::Vector2f d = p1 - p0;
+    float        len = std::sqrt(d.x * d.x + d.y * d.y);
+    if (len < 0.5f) return;
+
+    sf::Vector2f u(d / len);
+    sf::Vector2f n(-u.y, u.x);
+    float hw = brushSize / 2.f;
+
+    sf::Vertex quad[4];
+    quad[0].position = p0 + n * hw;
+    quad[1].position = p1 + n * hw;
+    quad[2].position = p1 - n * hw;
+    quad[3].position = p0 - n * hw;
+    for (auto& v : quad) v.color = col;
+    rt_.draw(quad, 4, sf::PrimitiveType::TriangleFan);
+
+    // Round cap at p1
+    sf::CircleShape cap(hw);
+    cap.setOrigin({ hw, hw });
+    cap.setFillColor(col);
+    cap.setPosition(p1);
+    rt_.draw(cap);
+}
+
+void Canvas::drawFilledRect(sf::Vector2f p0, sf::Vector2f p1, sf::Color col)
+{
+    float x = std::min(p0.x, p1.x);
+    float y = std::min(p0.y, p1.y);
+    float w = std::abs(p1.x - p0.x);
+    float h = std::abs(p1.y - p0.y);
+
+    sf::RectangleShape r({ w, h });
+    r.setPosition({ x, y });
+    r.setFillColor(col);
+    r.setOutlineThickness(0.f);
+    rt_.draw(r);
+}
+
+void Canvas::drawCircleBorder(sf::Vector2f center, float radius, sf::Color col)
+{
+    sf::CircleShape c(radius, 64);
+    c.setOrigin({ radius, radius });
+    c.setPosition(center);
+    c.setFillColor(sf::Color::Transparent);
+    c.setOutlineColor(col);
+    c.setOutlineThickness(brushSize);
+    rt_.draw(c);
+}
+
+// ---------------------------------------------------------------------------
 sf::Image Canvas::getImage() const
 {
-    return canvas.getTexture().copyToImage();
+    return rt_.getTexture().copyToImage();
 }
 
-const sf::Texture& Canvas::getTexture() const
+const sf::Texture& Canvas::getCommittedTexture() const
 {
-    return canvas.getTexture();
+    return rt_.getTexture();
+}
+
+sf::Vector2u Canvas::getSize() const
+{
+    return rt_.getSize();
 }

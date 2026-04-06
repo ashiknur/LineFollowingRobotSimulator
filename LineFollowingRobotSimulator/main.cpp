@@ -1,123 +1,107 @@
 #include <SFML/Graphics.hpp>
+#include <imgui.h>
+#include <imgui-SFML.h>
 #include <thread>
-#include<iostream>
+#include <iostream>
+
 #include "Canvas.hpp"
 #include "Robot.hpp"
 #include "SharedState.hpp"
 #include "config.hpp"
+#include "AppUI.hpp"
 
 void userThreadFunc(SharedState*);
 
+// ---------------------------------------------------------------------------
 int main()
 {
+    // Window – wider than the raw canvas to make room for both side panels
+    const unsigned WIN_W = WIDTH + static_cast<unsigned>(172 + 430);
+    const unsigned WIN_H = HEIGHT;
+
     sf::RenderWindow window(
-        sf::VideoMode({ WIDTH, HEIGHT }),
-        "Threaded Line Follower"
+        sf::VideoMode({ WIN_W, WIN_H }),
+        "Line Follower Simulator"
     );
     window.setFramerateLimit(60);
 
-    Canvas canvas;
-    Robot robot;
+    // ── ImGui-SFML init ─────────────────────────────────────────────────────
+    if (!ImGui::SFML::Init(window))
+    {
+        std::cerr << "Failed to initialize ImGui-SFML\n";
+        return 1;
+    }
+
+    // ── Style tweaks ─────────────────────────────────────────────────────────
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowBorderSize = 1.f;
+    style.FrameRounding = 4.f;
+    style.ItemSpacing = { 8.f, 5.f };
+    style.ScrollbarSize = 10.f;
+
+    // Dark theme (comfortable for code editing)
+    ImGui::StyleColorsDark();
+
+    // ── Simulation objects ───────────────────────────────────────────────────
+    Canvas      canvas;
+    Robot       robot;
     SharedState shared;
+    AppUI       ui(canvas, robot, shared, window);
 
-    bool drawing = true;
-    bool userThreadStarted = false;
-
-    std::vector<sf::Vector2f> points;
+    bool        userThreadStarted = false;
     std::thread userThread;
+    sf::Clock   deltaClock;
 
-    sf::Clock clock;
-
+    // ── Main loop ────────────────────────────────────────────────────────────
     while (window.isOpen())
     {
-        float dt = clock.restart().asSeconds();
+        sf::Time dt = deltaClock.restart();
 
-        while (auto e = window.pollEvent())
+        // Process events
+        while (auto ev = window.pollEvent())
         {
-            if (e->is<sf::Event::Closed>())
+            ImGui::SFML::ProcessEvent(window, *ev);
+            if (ev->is<sf::Event::Closed>())
                 window.close();
-
-            // -------- DRAWING MODE --------
-            if (drawing)
-            {
-                if (e->is<sf::Event::MouseButtonPressed>())
-                {
-                    auto m = e->getIf<sf::Event::MouseButtonPressed>();
-                    if (m->button == sf::Mouse::Button::Left)
-                        points.push_back({
-                            (float)m->position.x,
-                            (float)m->position.y
-                            });
-                }
-
-                if (e->is<sf::Event::MouseMoved>() &&
-                    sf::Mouse::isButtonPressed(sf::Mouse::Button::Left))
-                {
-                    auto m = e->getIf<sf::Event::MouseMoved>();
-                    points.push_back({
-                        (float)m->position.x,
-                        (float)m->position.y
-                        });
-                }
-
-                if (e->is<sf::Event::KeyPressed>() &&
-                    e->getIf<sf::Event::KeyPressed>()->code ==
-                    sf::Keyboard::Key::Enter)
-                {
-                    drawing = false;
-
-                    // START USER THREAD ONCE
-                    if (!userThreadStarted)
-                    {
-                        std::cout << "Starting user thread..." << std::endl;
-                        userThreadStarted = true;
-                        userThread = std::thread(userThreadFunc, &shared);
-                        std::cout << "User thread started." << std::endl;
-                    }
-                }
-            }
         }
 
-        // -------- DRAW CANVAS --------
-        canvas.handleDrawing(drawing, points);
+        ImGui::SFML::Update(window, dt);
 
-        // -------- SIMULATION MODE --------
-        if (!drawing)
+        // Build UI; returns true the one frame the user clicks "Run"
+        bool startSim = ui.render();
+
+        // Spawn user thread exactly once
+        if (startSim && !userThreadStarted)
         {
-            // Update sensors for user thread
+            std::cout << "Starting simulation thread...\n";
+            userThreadStarted = true;
+            userThread = std::thread(userThreadFunc, &shared);
+        }
 
+        // ── Simulation step (skipped when paused) ──────────────────────────
+        if (userThreadStarted && !shared.paused.load())
+        {
             {
                 std::lock_guard<std::mutex> lock(shared.sensorMutex);
-                auto sensorValues = robot.readSensors(canvas.getImage());
-                shared.sensors = sensorValues;
+                shared.sensors = robot.readSensors(canvas.getImage());
             }
-            // Apply motor state (latched, thread-safe)
             robot.leftMotor.setSpeed(shared.leftMotor.load());
             robot.rightMotor.setSpeed(shared.rightMotor.load());
-
-            robot.update(dt, canvas.getImage());
-
-        }
-        else
-        {
-            // Drawing mode: robot must NOT move
-            robot.leftMotor.setSpeed(0.f);
-            robot.rightMotor.setSpeed(0.f);
+            robot.update(dt.asSeconds(), canvas.getImage());
         }
 
-        // -------- RENDER --------
-        window.clear(sf::Color::White);
-        window.draw(sf::Sprite(canvas.getTexture()));
-        robot.draw(window);
+        // ── Render ────────────────────────────────────────────────────────
+        window.clear({ 35, 35, 38, 255 });
+        ImGui::SFML::Render(window);
         window.display();
     }
 
-    // -------- CLEAN SHUTDOWN --------
+    // ── Clean shutdown ────────────────────────────────────────────────────
     shared.running = false;
+    shared.paused = false;   // wake thread if it checks this
     if (userThreadStarted)
         userThread.join();
 
+    ImGui::SFML::Shutdown();
     return 0;
 }
-
-
