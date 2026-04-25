@@ -2,10 +2,14 @@
 #include <SFML/Graphics.hpp>
 #include <imgui.h>
 #include <string>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 #include "Canvas.hpp"
 #include "Robot.hpp"
 #include "SharedState.hpp"
+#include "HotReload.hpp"
 
 // ImGuiColorTextEdit – drop TextEditor.h / TextEditor.cpp from
 // https://github.com/BalazsJako/ImGuiColorTextEdit into your source tree.
@@ -21,11 +25,15 @@ public:
     AppUI(Canvas& canvas,
         Robot& robot,
         SharedState& shared,
+        HotReload& hotreload,
         sf::RenderWindow& window);
 
+    ~AppUI();   // joins compileThread_ if still running
+
     // Call once per frame AFTER ImGui::SFML::Update().
-    // Returns true on the single frame the user first clicks "Run"
-    // (so main.cpp knows to spawn the user thread exactly once).
+    // Returns true on the single frame the user thread should be spawned
+    // (i.e. the frame when the initial compile finishes successfully and the
+    // simulation begins).
     bool render();
 
 private:
@@ -33,6 +41,7 @@ private:
     Canvas& canvas_;
     Robot& robot_;
     SharedState& shared_;
+    HotReload& hotreload_;
     sf::RenderWindow& window_;
 
     // ── Scene composite texture (canvas + robot rendered together) ───────────
@@ -41,9 +50,30 @@ private:
     // ── Code editor ─────────────────────────────────────────────────────────
     TextEditor editor_;
 
-    // ── State ────────────────────────────────────────────────────────────────
-    bool simStarted_ = false;  // has Run been pressed at least once?
-    bool firstRun_ = false;  // true for exactly one frame when Run is pressed
+    // ── Simulation state ─────────────────────────────────────────────────────
+    bool simStarted_ = false;  // thread has been (or will be) spawned
+    bool firstRun_ = false;  // true for the one frame the thread should spawn
+
+    // Set by compile thread when initial-run compile succeeds;
+    // consumed by render() to flip simStarted_ and return true.
+    std::atomic<bool> pendingThreadStart_{ false };
+
+    // True while we are waiting for the very first compile (Run button pressed
+    // but thread not yet spawned).
+    bool compilingForRun_ = false;
+
+    // ── Hot-reload compile state ─────────────────────────────────────────────
+    // 0 = idle, 1 = compiling, 2 = success, 3 = failed
+    std::atomic<int>  compileStatus_{ 0 };
+    std::string       compileOutput_;         // protected by compileOutputMutex_
+    std::mutex        compileOutputMutex_;
+    std::thread       compileThread_;
+    bool              scrollCompileLog_ = false; // auto-scroll flag
+
+    // Starts an async compile; shared_.paused is set true during the compile.
+    // forRun: if true, sets pendingThreadStart_ on success instead of just
+    //         updating reloadPending.
+    void startCompile(bool forRun);
 
     // ── Panel renderers ──────────────────────────────────────────────────────
     void renderToolsPanel(float w, float h);
@@ -54,8 +84,8 @@ private:
     void buildScene();
 
     // ── Canvas mouse tracking ────────────────────────────────────────────────
-    ImVec2 canvasOrigin_ = { 0.f, 0.f };  // top-left of displayed image (screen)
-    ImVec2 canvasDisp_ = { 0.f, 0.f };  // displayed size (screen pixels)
+    ImVec2 canvasOrigin_ = { 0.f, 0.f };
+    ImVec2 canvasDisp_ = { 0.f, 0.f };
     bool   prevMouse_ = false;
 
     sf::Vector2f screenToCanvas(ImVec2 p) const;
@@ -64,4 +94,9 @@ private:
     // ── File helpers ─────────────────────────────────────────────────────────
     void loadCode();
     void saveCode() const;
+
+    // ── Robot starting position ───────────────────────────────────────────────
+    float startingPosX_ = 100.f;
+    float startingPosY_ = 100.f;
+    float startingAngle_ = 0.f;
 };

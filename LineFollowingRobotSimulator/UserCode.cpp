@@ -26,12 +26,13 @@ void loop()
 {
     // Main control loop code here
     auto s = readSensor();
-
+    if (s.size() < 3)
+        return;
     //std::cout << "Motor Started " << s.size() << std::endl;
     //if (s.size() >= 3)
     //{
         // Line-following error (right - left)
-    float error = (s[2] ? 1.f : 0.f) - (s[0] ? 1.f : 0.f);
+    float error = (s[0] ? 1.f : 0.f) - (s[2] ? 1.f : 0.f);
 
     // PID math (dt derived from delay)
     float dt = LOOP_DELAY_MS / 1000.f;
@@ -60,4 +61,16 @@ void loop()
     //delayMs((int)LOOP_DELAY_MS);
 
 }
+
+
+
+
+
+
+
+
+
+
+
+
 

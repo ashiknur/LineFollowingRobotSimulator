@@ -129,13 +129,16 @@
   <ItemGroup>
     <ClCompile Include="Appui.cpp" />
     <ClCompile Include="Canvas.cpp" />
+    <ClCompile Include="Hotreload.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Motor.cpp" />
     <ClCompile Include="Robot.cpp" />
     <ClCompile Include="Sensor.cpp" />
     <ClCompile Include="TextEditor.cpp" />
     <ClCompile Include="UserAPI.cpp" />
+    <ClCompile Include="UserAPI_hotreload.cpp" />
     <ClCompile Include="UserCode.cpp" />
+    <ClCompile Include="Usercodeadapter.cpp" />
     <ClCompile Include="UserMain.cpp" />
     <ClCompile Include="UserThread.cpp" />
   </ItemGroup>
@@ -143,6 +146,7 @@
     <ClInclude Include="Appui.hpp" />
     <ClInclude Include="Canvas.hpp" />
     <ClInclude Include="config.hpp" />
+    <ClInclude Include="Hotreload.hpp" />
     <ClInclude Include="Math.hpp" />
     <ClInclude Include="Motor.hpp" />
     <ClInclude Include="Robot.hpp" />

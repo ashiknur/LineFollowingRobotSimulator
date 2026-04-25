@@ -5,6 +5,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -22,8 +23,11 @@ static ImU32 sfColorToIM(sf::Color c)
 
 // ---------------------------------------------------------------------------
 AppUI::AppUI(Canvas& canvas, Robot& robot,
-    SharedState& shared, sf::RenderWindow& window)
-    : canvas_(canvas), robot_(robot), shared_(shared), window_(window)
+    SharedState& shared, HotReload& hotreload,
+    sf::RenderWindow& window)
+    : canvas_(canvas), robot_(robot),
+    shared_(shared), hotreload_(hotreload),
+    window_(window)
 {
     sceneRT_.resize({ WIDTH, HEIGHT });
 
@@ -33,11 +37,83 @@ AppUI::AppUI(Canvas& canvas, Robot& robot,
     editor_.SetShowWhitespaces(false);
     editor_.SetTabSize(4);
 
-    // Dark palette that fits inside both light and dark ImGui themes
     auto palette = TextEditor::GetDarkPalette();
     editor_.SetPalette(palette);
 
     loadCode();
+}
+
+AppUI::~AppUI()
+{
+    // If a compile is still running when the window closes, wait for it.
+    if (compileThread_.joinable())
+        compileThread_.join();
+}
+
+// ---------------------------------------------------------------------------
+// startCompile – launches an async compile on a background thread.
+//
+// forRun  = true  → called from the Run button; on success sets
+//                   pendingThreadStart_ so the main loop spawns the thread.
+// forRun  = false → called from Compile & Reload; on success the user thread
+//                   picks up HotReload::reloadPending and calls setup() once.
+// ---------------------------------------------------------------------------
+void AppUI::startCompile(bool forRun)
+{
+    // Join any previous compile thread before starting a new one
+    if (compileThread_.joinable())
+        compileThread_.join();
+
+    compileStatus_ = 1;   // Compiling
+    {
+        std::lock_guard<std::mutex> lk(compileOutputMutex_);
+        compileOutput_.clear();
+    }
+    scrollCompileLog_ = false;
+
+    // Pause the simulation so the user thread is not inside callLoop()
+    // while we unload/reload the shared library.
+    shared_.paused = true;
+
+    compileThread_ = std::thread([this, forRun]
+        {
+            // Give the user thread a brief moment to finish any in-progress
+            // callLoop() invocation and enter its sleep-while-paused branch.
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+            auto res = hotreload_.compile();
+
+            // Write output under lock so the render thread can safely read it
+            {
+                std::lock_guard<std::mutex> lk(compileOutputMutex_);
+                compileOutput_ = res.output;
+                scrollCompileLog_ = true;
+            }
+
+            if (res.success)
+            {
+                compileStatus_ = 2;   // Success
+                if (forRun)
+                {
+                    // Signal main loop to spawn the user thread
+                    pendingThreadStart_ = true;
+                    // Keep paused = true until the thread is actually running;
+                    // the thread itself will proceed once unpaused in render().
+                }
+                else
+                {
+                    // Hot-reload: user thread will call setup() once via
+                    // reloadPending, then resume looping.
+                    shared_.paused = false;
+                }
+            }
+            else
+            {
+                compileStatus_ = 3;   // Failed
+                // Leave sim paused so the user can read the error and fix the code.
+                // They can click Resume (or Compile & Reload again) when ready.
+            }
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -45,39 +121,47 @@ bool AppUI::render()
 {
     firstRun_ = false;
 
+    // ── Pending thread start (compile for initial Run succeeded) ─────────────
+    if (pendingThreadStart_.exchange(false))
+    {
+        simStarted_ = true;
+        compilingForRun_ = false;
+        firstRun_ = true;       // main.cpp will spawn the user thread
+        shared_.paused = false;   // unblock the thread once it starts
+    }
+
     const float ww = static_cast<float>(window_.getSize().x);
     const float wh = static_cast<float>(window_.getSize().y);
-    const float cw = ww - TOOLS_W - CODE_W;   // canvas panel width
+    const float cw = ww - TOOLS_W - CODE_W;
 
     buildScene();
 
-    // Common flags: no chrome, pinned, no bring-to-front
     const ImGuiWindowFlags WF =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    // ── LEFT  – Drawing Tools ────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ 0,                0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ TOOLS_W,         wh }, ImGuiCond_Always);
+    // ── LEFT  – Drawing Tools ─────────────────────────────────────────────
+    ImGui::SetNextWindowPos({ 0,       0 }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ TOOLS_W, wh }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8.f, 10.f });
     ImGui::Begin("##tools", nullptr, WF);
     renderToolsPanel(TOOLS_W, wh);
     ImGui::End();
     ImGui::PopStyleVar();
 
-    // ── CENTER – Canvas ──────────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ TOOLS_W,          0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ cw,              wh }, ImGuiCond_Always);
+    // ── CENTER – Canvas ───────────────────────────────────────────────────
+    ImGui::SetNextWindowPos({ TOOLS_W,     0 }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ cw,          wh }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.f, 0.f });
     ImGui::Begin("##canvas", nullptr, WF);
     renderCanvasPanel(cw, wh);
     ImGui::End();
     ImGui::PopStyleVar();
 
-    // ── RIGHT – Code Editor ──────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ TOOLS_W + cw,     0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ CODE_W,          wh }, ImGuiCond_Always);
+    // ── RIGHT – Code Editor ───────────────────────────────────────────────
+    ImGui::SetNextWindowPos({ TOOLS_W + cw, 0 }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ CODE_W,       wh }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8.f, 8.f });
     ImGui::Begin("##code", nullptr, WF);
     renderCodePanel(CODE_W, wh);
@@ -106,12 +190,10 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
 {
     const float btnW = w - 16.f;
 
-    // ── Tool heading ────────────────────────────────────────────────────────
     ImGui::TextDisabled("Drawing Tools");
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Helper: highlighted button when that tool is active
     auto toolBtn = [&](const char* label, DrawTool t)
         {
             bool active = (canvas_.tool == t);
@@ -142,7 +224,6 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
 
     float halfW = (btnW - 4.f) / 2.f;
 
-    // Black button
     bool blk = (canvas_.penColor == sf::Color::Black);
     ImGui::PushStyleColor(ImGuiCol_Button,
         blk ? ImVec4{ 0.08f,0.08f,0.08f,1.f } : ImVec4{ 0.25f,0.25f,0.25f,1.f });
@@ -154,7 +235,6 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
 
     ImGui::SameLine(0.f, 4.f);
 
-    // White button
     bool wht = (canvas_.penColor == sf::Color::White);
     ImGui::PushStyleColor(ImGuiCol_Button,
         wht ? ImVec4{ 0.98f,0.98f,0.98f,1.f } : ImVec4{ 0.75f,0.75f,0.75f,1.f });
@@ -182,6 +262,31 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
         canvas_.clear();
     ImGui::PopStyleColor(2);
 
+    // ── Robot starting position ─────────────────────────────────────────────
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("Robot Start Position");
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(btnW);
+    if (ImGui::InputFloat("Pos X##startX", &startingPosX_, 0.f, 0.f, "%.1f"))
+        robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+
+    ImGui::SetNextItemWidth(btnW);
+    if (ImGui::InputFloat("Pos Y##startY", &startingPosY_, 0.f, 0.f, "%.1f"))
+        robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+
+    ImGui::SetNextItemWidth(btnW);
+    if (ImGui::InputFloat("Angle##startA", &startingAngle_, 0.f, 0.f, "%.1f deg"))
+        robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Button, { 0.20f, 0.45f, 0.70f, 1.f });
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.28f, 0.55f, 0.85f, 1.f });
+    if (ImGui::Button("Reset Robot Pos", { btnW, 30.f }))
+        robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+    ImGui::PopStyleColor(2);
+
     // ── Status strip ───────────────────────────────────────────────────────
     ImGui::Spacing();
     ImGui::Separator();
@@ -190,22 +295,26 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
     const char* toolName = "?";
     switch (canvas_.tool)
     {
-    case DrawTool::Freehand:    toolName = "Freehand";    break;
-    case DrawTool::Eraser:      toolName = "Eraser";      break;
-    case DrawTool::StraightLine:toolName = "Line";        break;
-    case DrawTool::FilledRect:  toolName = "Filled Rect"; break;
-    case DrawTool::CircleBorder:toolName = "Circle";      break;
+    case DrawTool::Freehand:     toolName = "Freehand";    break;
+    case DrawTool::Eraser:       toolName = "Eraser";      break;
+    case DrawTool::StraightLine: toolName = "Line";        break;
+    case DrawTool::FilledRect:   toolName = "Filled Rect"; break;
+    case DrawTool::CircleBorder: toolName = "Circle";      break;
     }
     ImGui::TextDisabled("Tool: %s", toolName);
 
+    int cs = compileStatus_.load();
     bool paused = shared_.paused.load();
-    bool running = simStarted_ && !paused;
-    if (!simStarted_)
+    if (!simStarted_ && !compilingForRun_)
         ImGui::TextDisabled("Sim: stopped");
+    else if (compilingForRun_ || cs == 1)
+        ImGui::TextColored({ 1.f, 0.8f, 0.2f, 1.f }, "Sim: compiling...");
+    else if (cs == 3)
+        ImGui::TextColored({ 1.f, 0.4f, 0.4f, 1.f }, "Sim: compile failed");
     else if (paused)
         ImGui::TextDisabled("Sim: paused");
-    else
-        ImGui::TextColored({ 0.3f,0.9f,0.3f,1.f }, "Sim: running");
+    else if (simStarted_)
+        ImGui::TextColored({ 0.3f, 0.9f, 0.3f, 1.f }, "Sim: running");
 }
 
 // ===========================================================================
@@ -215,7 +324,6 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
 {
     sf::Vector2u ts = sceneRT_.getSize();
 
-    // Scale uniformly to fit panel
     float scale = std::min(panelW / (float)ts.x, panelH / (float)ts.y);
     ImVec2 disp = { ts.x * scale, ts.y * scale };
 
@@ -223,11 +331,9 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
     float padY = (panelH - disp.y) / 2.f;
     ImGui::SetCursorPos({ padX, padY });
 
-    // Record screen-space origin for coordinate conversion
     canvasOrigin_ = ImGui::GetCursorScreenPos();
     canvasDisp_ = disp;
 
-    // imgui-sfml overload – handles Y-flip automatically
     ImGui::Image(sceneRT_, sf::Vector2f{ disp.x, disp.y });
 
     bool hovered = ImGui::IsItemHovered();
@@ -243,7 +349,6 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
             canvas_.mouseMoved(cp);
     }
 
-    // Release even if cursor drifted outside the image
     if (!mouseNow && prevMouse_ && canvas_.isDragging())
         canvas_.mouseReleased(screenToCanvas(mp));
 
@@ -255,10 +360,10 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
         canvas_.tool != DrawTool::Eraser)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2      s = canvasToScreen(canvas_.getDragStart());
-        ImVec2      cur = canvasToScreen(canvas_.getDragCur());
-        ImU32       col = sfColorToIM(canvas_.penColor);
-        float       sw = canvas_.brushSize * scale; // brush size in screen px
+        ImVec2 s = canvasToScreen(canvas_.getDragStart());
+        ImVec2 cur = canvasToScreen(canvas_.getDragCur());
+        ImU32  col = sfColorToIM(canvas_.penColor);
+        float  sw = canvas_.brushSize * scale;
 
         switch (canvas_.tool)
         {
@@ -294,26 +399,38 @@ void AppUI::renderCodePanel(float panelW, float panelH)
     const float btnW = 100.f;
     const float sep = 6.f;
 
-    // ── Run / Pause / Resume ────────────────────────────────────────────────
+    int  cs = compileStatus_.load();
+    bool compiling = (cs == 1);
+
+    // ── Row 1: Run / Pause / Resume  +  Save  +  Reload ──────────────────
     if (!simStarted_)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            { 0.18f, 0.65f, 0.28f, 1.f });
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-            { 0.25f, 0.80f, 0.35f, 1.f });
-        if (ImGui::Button("▶  Run", { btnW, btnH }))
+        if (compilingForRun_)
         {
-            saveCode();
-            simStarted_ = true;
-            shared_.paused = false;
-            firstRun_ = true;
+            // Show a disabled "Compiling…" stand-in where Run used to be
+            ImGui::BeginDisabled();
+            ImGui::Button("⏳ Compiling", { btnW, btnH });
+            ImGui::EndDisabled();
         }
-        ImGui::PopStyleColor(2);
+        else
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                { 0.18f, 0.65f, 0.28f, 1.f });
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                { 0.25f, 0.80f, 0.35f, 1.f });
+            if (ImGui::Button("▶  Run", { btnW, btnH }))
+            {
+                saveCode();
+                compilingForRun_ = true;
+                startCompile(/*forRun=*/true);
+            }
+            ImGui::PopStyleColor(2);
+        }
     }
     else
     {
         bool paused = shared_.paused.load();
-        if (paused)
+        if (paused && !compiling)
         {
             ImGui::PushStyleColor(ImGuiCol_Button,
                 { 0.18f, 0.65f, 0.28f, 1.f });
@@ -322,6 +439,12 @@ void AppUI::renderCodePanel(float panelW, float panelH)
             if (ImGui::Button("▶  Resume", { btnW, btnH }))
                 shared_.paused = false;
             ImGui::PopStyleColor(2);
+        }
+        else if (compiling)
+        {
+            ImGui::BeginDisabled();
+            ImGui::Button("⏳ Compiling", { btnW, btnH });
+            ImGui::EndDisabled();
         }
         else
         {
@@ -335,7 +458,7 @@ void AppUI::renderCodePanel(float panelW, float panelH)
         }
     }
 
-    // ── Save ─────────────────────────────────────────────────────────────────
+    // ── Save ──────────────────────────────────────────────────────────────
     ImGui::SameLine(0.f, sep);
     ImGui::PushStyleColor(ImGuiCol_Button, { 0.20f,0.40f,0.75f,1.f });
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.28f,0.50f,0.90f,1.f });
@@ -343,22 +466,92 @@ void AppUI::renderCodePanel(float panelW, float panelH)
         saveCode();
     ImGui::PopStyleColor(2);
 
-    // ── Reload from disk ─────────────────────────────────────────────────────
+    // ── Reload from disk ──────────────────────────────────────────────────
     ImGui::SameLine(0.f, sep);
     if (ImGui::Button("↺ Reload", { btnW, btnH }))
         loadCode();
 
-    // ── Line / column display ────────────────────────────────────────────────
+    // ── Line / column display ─────────────────────────────────────────────
     ImGui::SameLine();
     auto cpos = editor_.GetCursorPosition();
     ImGui::TextDisabled("  Ln %d  Col %d", cpos.mLine + 1, cpos.mColumn + 1);
 
+    // ── Row 2: Compile & Reload button ────────────────────────────────────
+    ImGui::Spacing();
+
+    if (compiling) ImGui::BeginDisabled();
+
+    ImGui::PushStyleColor(ImGuiCol_Button, { 0.50f, 0.18f, 0.70f, 1.f });
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.62f, 0.25f, 0.85f, 1.f });
+
+    const float compileW = panelW - 16.f;  // full width
+    bool doCompile = ImGui::Button("⚙  Compile & Reload", { compileW, btnH });
+    ImGui::PopStyleColor(2);
+
+    if (compiling) ImGui::EndDisabled();
+
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !compiling)
+        ImGui::SetTooltip(
+            "Saves, recompiles UserCode.cpp into a shared library,\n"
+            "and hot-reloads it — no need to restart the app.");
+
+    if (doCompile && simStarted_ && !compiling)
+    {
+        saveCode();
+        startCompile(/*forRun=*/false);
+    }
+
+    // ── Compile status badge ──────────────────────────────────────────────
+    ImGui::Spacing();
+    switch (cs)
+    {
+    case 0:  ImGui::TextDisabled("No compile yet"); break;
+    case 1:  ImGui::TextColored({ 1.f, 0.85f, 0.2f,  1.f }, "⏳ Compiling..."); break;
+    case 2:  ImGui::TextColored({ 0.3f, 0.9f, 0.3f,  1.f }, "✓  Compile succeeded – code reloaded"); break;
+    case 3:  ImGui::TextColored({ 1.f,  0.4f, 0.35f, 1.f }, "✗  Compile failed – see output below"); break;
+    }
+
+    // ── Compile output log ────────────────────────────────────────────────
+    const float logH = 120.f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{ 0.12f, 0.12f, 0.12f, 1.f });
+    ImGui::BeginChild("##compileLog", { compileW, logH },
+        ImGuiChildFlags_Border);
+
+    {
+        // Copy under lock to avoid race with compile thread
+        std::string outputCopy;
+        {
+            std::lock_guard<std::mutex> lk(compileOutputMutex_);
+            outputCopy = compileOutput_;
+            bool doScroll = scrollCompileLog_;
+            if (doScroll) scrollCompileLog_ = false;  // consumed
+
+            if (!outputCopy.empty())
+                ImGui::TextUnformatted(outputCopy.c_str(),
+                    outputCopy.c_str() + outputCopy.size());
+            else
+                ImGui::TextDisabled("(compile output will appear here)");
+
+            if (doScroll)
+                ImGui::SetScrollHereY(1.0f);
+        }
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
     ImGui::Separator();
 
-    // ── Editor (fills remaining height) ──────────────────────────────────────
-    float edH = panelH - btnH - 14.f; // 14 = separator + spacing
-    editor_.Render("##code_editor",
-        ImVec2{ panelW - 16.f, edH });
+    // ── Editor (fills remaining height) ──────────────────────────────────
+    // Heights consumed above the editor:
+    //   btnH (row1) + spacing + btnH (row2) + spacing + lineH (status) +
+    //   logH + separator + some padding ≈ 14px
+    const float consumedH = btnH + 4.f + btnH + 4.f + ImGui::GetTextLineHeightWithSpacing()
+        + 4.f + logH + 14.f;
+    float edH = panelH - consumedH;
+    if (edH < 80.f) edH = 80.f;
+
+    editor_.Render("##code_editor", ImVec2{ panelW - 16.f, edH });
 }
 
 // ===========================================================================
@@ -375,7 +568,6 @@ void AppUI::loadCode()
     }
     else
     {
-        // Fallback – pre-fill with PID template so the editor isn't empty
         editor_.SetText(
             "#include \"UserAPI.hpp\"\n"
             "#include \"UserCode.hpp\"\n"

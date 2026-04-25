@@ -22,6 +22,13 @@ public:
     sf::Vector2f getPosition() const { return position; }
     float        getAngle()    const { return angle; }
 
+    // Reset robot to a specific position and angle (degrees).
+    void reset(float x, float y, float angleDeg)
+    {
+        position = { x, y };
+        angle = angleDeg;
+    }
+
 private:
     sf::Vector2f position;
     float        angle;

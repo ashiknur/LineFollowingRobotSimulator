@@ -7,15 +7,16 @@
 #include "Canvas.hpp"
 #include "Robot.hpp"
 #include "SharedState.hpp"
+#include "HotReload.hpp"
 #include "config.hpp"
 #include "AppUI.hpp"
 
-void userThreadFunc(SharedState*);
+// Defined in UserThread.cpp
+void userThreadFunc(SharedState*, HotReload*);
 
 // ---------------------------------------------------------------------------
 int main()
 {
-    // Window – wider than the raw canvas to make room for both side panels
     const unsigned WIN_W = WIDTH + static_cast<unsigned>(172 + 430);
     const unsigned WIN_H = HEIGHT;
 
@@ -38,15 +39,21 @@ int main()
     style.FrameRounding = 4.f;
     style.ItemSpacing = { 8.f, 5.f };
     style.ScrollbarSize = 10.f;
-
-    // Dark theme (comfortable for code editing)
     ImGui::StyleColorsDark();
 
     // ── Simulation objects ───────────────────────────────────────────────────
     Canvas      canvas;
     Robot       robot;
     SharedState shared;
-    AppUI       ui(canvas, robot, shared, window);
+
+    // HotReload manages compiling UserCode.cpp into a shared library at
+    // runtime and loading it via dlopen/LoadLibrary.
+    // sourceFile: path to UserCode.cpp (relative to CWD = project source dir)
+    // libOut:     base path for the generated .dll/.so (no extension)
+    HotReload hotreload("UserCode.cpp", "./usercode_hot");
+    hotreload.setSharedPtr(&shared);
+
+    AppUI ui(canvas, robot, shared, hotreload, window);
 
     bool        userThreadStarted = false;
     std::thread userThread;
@@ -57,7 +64,6 @@ int main()
     {
         sf::Time dt = deltaClock.restart();
 
-        // Process events
         while (auto ev = window.pollEvent())
         {
             ImGui::SFML::ProcessEvent(window, *ev);
@@ -67,18 +73,18 @@ int main()
 
         ImGui::SFML::Update(window, dt);
 
-        // Build UI; returns true the one frame the user clicks "Run"
+        // render() returns true on the single frame the sim thread should start
         bool startSim = ui.render();
 
-        // Spawn user thread exactly once
+        // Spawn user thread exactly once, after the initial compile succeeds
         if (startSim && !userThreadStarted)
         {
             std::cout << "Starting simulation thread...\n";
             userThreadStarted = true;
-            userThread = std::thread(userThreadFunc, &shared);
+            userThread = std::thread(userThreadFunc, &shared, &hotreload);
         }
 
-        // ── Simulation step (skipped when paused) ──────────────────────────
+        // ── Simulation step (skipped when paused or thread not yet started) ──
         if (userThreadStarted && !shared.paused.load())
         {
             {
@@ -98,7 +104,7 @@ int main()
 
     // ── Clean shutdown ────────────────────────────────────────────────────
     shared.running = false;
-    shared.paused = false;   // wake thread if it checks this
+    shared.paused = false;   // wake thread if sleeping
     if (userThreadStarted)
         userThread.join();
 

@@ -28,7 +28,7 @@ std::vector<int> Robot::readSensors(const sf::Image& img)
 void Robot::update(float dt, const sf::Image& img)
 {
     float avg = (leftMotor.getSpeed() + rightMotor.getSpeed()) * 0.5f;
-    float rot = (rightMotor.getSpeed() - leftMotor.getSpeed()) * 0.05f;
+    float rot = (-rightMotor.getSpeed() + leftMotor.getSpeed()) * 0.05f;
 
     angle += rot * dt * (180.f / 3.1415926f);
 
