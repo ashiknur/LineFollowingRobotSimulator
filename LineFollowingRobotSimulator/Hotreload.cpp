@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <vector>
 #include <thread>
 #include <chrono>
 
@@ -38,6 +39,54 @@ static std::string dlError()
 #  endif
 static std::string dlError() { return dlerror() ? dlerror() : "unknown"; }
 #endif
+
+// ---------------------------------------------------------------------------
+#if defined(_WIN32)
+// Runs `cmd /c <cmdLine>` with no visible console window (the app is a GUI
+// process; _popen would flash a cmd box on every compile), capturing
+// stdout+stderr. Returns true when the process exits with code 0.
+static bool runHidden(const std::string& cmdLine, std::string& output)
+{
+    SECURITY_ATTRIBUTES sa{ sizeof(sa), nullptr, TRUE };
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0))
+        return false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = wr;
+    si.hStdError = wr;
+
+    std::string full = "cmd.exe /c " + cmdLine;
+    std::vector<char> buf(full.begin(), full.end());
+    buf.push_back('\0');
+
+    PROCESS_INFORMATION pi{};
+    BOOL ok = CreateProcessA(nullptr, buf.data(), nullptr, nullptr,
+        TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(wr);
+    if (!ok)
+    {
+        CloseHandle(rd);
+        return false;
+    }
+
+    char chunk[256];
+    DWORD n = 0;
+    while (ReadFile(rd, chunk, sizeof(chunk), &n, nullptr) && n > 0)
+        output.append(chunk, chunk + n);
+    CloseHandle(rd);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return code == 0;
+}
+#endif // _WIN32
 
 // ---------------------------------------------------------------------------
 // Toolchain discovery
@@ -83,20 +132,14 @@ static std::string compilerInRoot(const fs::path& root)
 // Use vswhere.exe (ships with VS 2017+) to locate the VS installation dir.
 static std::string findVSInstallPath()
 {
-    const char* cmd =
-        "\"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\""
+    std::string out;
+    runHidden(
+        "\"\"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe\""
         " -latest -requires Microsoft.VisualCpp.Tools.HostX64.TargetX64"
-        " -property installationPath 2>nul";
+        " -property installationPath 2>nul\"",
+        out);
 
-    FILE* f = _popen(cmd, "r");
-    if (!f)
-        return {};
-
-    char buf[512] = {};
-    fgets(buf, (int)sizeof(buf) - 1, f);
-    _pclose(f);
-
-    std::string path(buf);
+    std::string path = out.substr(0, out.find('\n'));
     while (!path.empty() &&
         (path.back() == '\n' || path.back() == '\r' || path.back() == ' '))
         path.pop_back();
@@ -304,10 +347,7 @@ CompileResult HotReload::compile()
     std::cout << "[HotReload] Compiler: "
               << (tc.kind == Toolchain::Gxx ? tc.path : tc.path + " (MSVC)") << "\n";
 
-    // Double quotes around the whole /c payload survive cmd's quote stripping
-    // even when batPath itself contains spaces.
-    const std::string cmdLine = "\"\"" + batPath + "\"\"";
-    FILE* pipe = _popen(cmdLine.c_str(), "r");
+    res.success = runHidden("\"" + batPath + "\"", res.output);
 
 #else
     // ── Linux / macOS: g++ directly ────────────────────────────────────────
@@ -320,28 +360,22 @@ CompileResult HotReload::compile()
         " 2>&1";
 
     std::cout << "[HotReload] " << fullCmd << "\n";
-    FILE* pipe = popen(fullCmd.c_str(), "r");
-#endif
 
-    // ── Capture compiler output ──────────────────────────────────────────────
+    // ── Run and capture compiler output ─────────────────────────────────────
+    FILE* pipe = popen(fullCmd.c_str(), "r");
     if (pipe)
     {
         char buf[256];
         while (fgets(buf, sizeof(buf), pipe))
             res.output += buf;
-
-#if defined(_WIN32)
-        int ret = _pclose(pipe);
-#else
-        int ret = pclose(pipe);
-#endif
-        res.success = (ret == 0);
+        res.success = (pclose(pipe) == 0);
     }
     else
     {
         res.output = "[HotReload] Failed to launch compiler process.\n";
         res.success = false;
     }
+#endif
 
     // ── Load the freshly built library ───────────────────────────────────────
     if (res.success)
