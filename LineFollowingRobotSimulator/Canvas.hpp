@@ -37,6 +37,18 @@ public:
 
     void clear();   // reset to white
 
+    // ── Undo / redo (snapshot per stroke / clear) ───────────────────────────
+    void undo();
+    void redo();
+    bool canUndo() const { return !undoStack_.empty(); }
+    bool canRedo() const { return !redoStack_.empty(); }
+
+    // Eraser paints the opposite of the current pen color
+    sf::Color eraserColor() const
+    {
+        return penColor == sf::Color::Black ? sf::Color::White : sf::Color::Black;
+    }
+
     // ── Preview helpers (used by AppUI DrawList overlay) ────────────────────
     bool         isDragging()   const { return dragging_; }
     sf::Vector2f getDragStart() const { return dragStart_; }
@@ -50,6 +62,12 @@ private:
     sf::Vector2f dragCur_;
 
     std::vector<sf::Vector2f> stroke_;  // freehand accumulated points
+
+    std::vector<sf::Image> undoStack_;
+    std::vector<sf::Image> redoStack_;
+
+    void pushUndoSnapshot();            // call BEFORE modifying the texture
+    void restoreImage(const sf::Image& img);
 
     // ── Internal draw helpers ───────────────────────────────────────────────
     void drawThickSegment(sf::Vector2f p0, sf::Vector2f p1, sf::Color col);

@@ -78,6 +78,12 @@ int main()
             ImGui::SFML::ProcessEvent(window, *ev);
             if (ev->is<sf::Event::Closed>())
                 window.close();
+            // Keep the render view 1:1 with the resized window so panels
+            // lay out in real pixels instead of being stretched
+            if (const auto* rs = ev->getIf<sf::Event::Resized>())
+                window.setView(sf::View(sf::FloatRect(
+                    { 0.f, 0.f },
+                    { (float)rs->size.x, (float)rs->size.y })));
         }
 
         ImGui::SFML::Update(window, dt);

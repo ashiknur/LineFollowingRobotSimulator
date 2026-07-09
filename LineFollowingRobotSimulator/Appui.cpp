@@ -9,12 +9,6 @@
 #include <chrono>
 
 // ---------------------------------------------------------------------------
-// Layout constants
-// ---------------------------------------------------------------------------
-static constexpr float TOOLS_W = 172.f;
-static constexpr float CODE_W = 430.f;
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 static ImU32 sfColorToIM(sf::Color c)
@@ -38,9 +32,7 @@ AppUI::AppUI(Canvas& canvas, Robot& robot,
     editor_.SetShowWhitespaces(false);
     editor_.SetTabSize(4);
 
-    auto palette = TextEditor::GetDarkPalette();
-    editor_.SetPalette(palette);
-
+    applyTheme();
     loadCode();
 }
 
@@ -131,9 +123,17 @@ bool AppUI::render()
         shared_.paused = false;   // unblock the thread once it starts
     }
 
+    const float menuH = renderMenuBar();
+    handleGlobalShortcuts();
+
     const float ww = static_cast<float>(window_.getSize().x);
     const float wh = static_cast<float>(window_.getSize().y);
-    const float cw = ww - TOOLS_W - CODE_W;
+    const float ph = wh - menuH;
+
+    // Clamp panel widths so every panel keeps a usable minimum
+    toolsW_ = std::clamp(toolsW_, 120.f, 320.f);
+    codeW_ = std::clamp(codeW_, 280.f, std::max(280.f, ww - toolsW_ - 250.f));
+    const float cw = ww - toolsW_ - codeW_;
 
     buildScene();
 
@@ -143,33 +143,201 @@ bool AppUI::render()
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     // ── LEFT  – Drawing Tools ─────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ 0,       0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ TOOLS_W, wh }, ImGuiCond_Always);
+    ImGui::SetNextWindowPos({ 0,       menuH }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ toolsW_, ph }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8.f, 10.f });
     ImGui::Begin("##tools", nullptr, WF);
-    renderToolsPanel(TOOLS_W, wh);
+    renderToolsPanel(toolsW_, ph);
     ImGui::End();
     ImGui::PopStyleVar();
 
     // ── CENTER – Canvas ───────────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ TOOLS_W,     0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ cw,          wh }, ImGuiCond_Always);
+    ImGui::SetNextWindowPos({ toolsW_,     menuH }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ cw,          ph }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.f, 0.f });
     ImGui::Begin("##canvas", nullptr, WF);
-    renderCanvasPanel(cw, wh);
+    renderCanvasPanel(cw, ph);
     ImGui::End();
     ImGui::PopStyleVar();
 
     // ── RIGHT – Code Editor ───────────────────────────────────────────────
-    ImGui::SetNextWindowPos({ TOOLS_W + cw, 0 }, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({ CODE_W,       wh }, ImGuiCond_Always);
+    ImGui::SetNextWindowPos({ toolsW_ + cw, menuH }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ codeW_,       ph }, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 8.f, 8.f });
     ImGui::Begin("##code", nullptr, WF);
-    renderCodePanel(CODE_W, wh);
+    renderCodePanel(codeW_, ph);
     ImGui::End();
     ImGui::PopStyleVar();
 
+    // ── Panel splitters (drawn last, on top) ──────────────────────────────
+    // splitterActive_ is consumed by the panels NEXT frame; while a drag is
+    // in progress the canvas and editor must not react to the mouse.
+    splitterActive_ = false;
+    renderSplitter("##split_tools", toolsW_, menuH, ph, toolsW_,
+        /*invert=*/false, 120.f, 320.f);
+    renderSplitter("##split_code", ww - codeW_, menuH, ph, codeW_,
+        /*invert=*/true, 280.f, std::max(280.f, ww - toolsW_ - 250.f));
+
+    renderReplacePopup();
+
     return firstRun_;
+}
+
+// ===========================================================================
+// Menu bar, theme, splitters, shortcuts
+// ===========================================================================
+float AppUI::renderMenuBar()
+{
+    float h = 0.f;
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("Edit"))
+        {
+            if (ImGui::MenuItem("Undo Code", "Ctrl+Z", false, editor_.CanUndo()))
+                editor_.Undo();
+            if (ImGui::MenuItem("Redo Code", "Ctrl+Shift+Z", false, editor_.CanRedo()))
+                editor_.Redo();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Undo Canvas", "Ctrl+Z", false, canvas_.canUndo()))
+                canvas_.undo();
+            if (ImGui::MenuItem("Redo Canvas", "Ctrl+Shift+Z", false, canvas_.canRedo()))
+                canvas_.redo();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Toggle Comment", "Ctrl+/"))
+                editor_.ToggleComments();
+            if (ImGui::MenuItem("Edit All Occurrences...", "Ctrl+D", false,
+                editor_.HasSelection()))
+                openReplacePopup_ = true;
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("View"))
+        {
+            if (ImGui::MenuItem("Dark Theme", nullptr, darkTheme_))
+            {
+                darkTheme_ = true; applyTheme();
+            }
+            if (ImGui::MenuItem("Light Theme", nullptr, !darkTheme_))
+            {
+                darkTheme_ = false; applyTheme();
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("Editor Text Size");
+            ImGui::SetNextItemWidth(160.f);
+            ImGui::SliderFloat("##fontscale", &editorFontScale_, 0.8f, 2.0f, "%.1fx");
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Layout"))
+            {
+                toolsW_ = 172.f; codeW_ = 430.f;
+            }
+            ImGui::EndMenu();
+        }
+        h = ImGui::GetWindowSize().y;
+        ImGui::EndMainMenuBar();
+    }
+    return h > 0.f ? h : ImGui::GetFrameHeight();
+}
+
+void AppUI::applyTheme()
+{
+    if (darkTheme_)
+    {
+        ImGui::StyleColorsDark();
+        editor_.SetPalette(TextEditor::GetDarkPalette());
+    }
+    else
+    {
+        ImGui::StyleColorsLight();
+        editor_.SetPalette(TextEditor::GetLightPalette());
+    }
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowBorderSize = 1.f;
+    style.FrameRounding = 4.f;
+    style.ItemSpacing = { 8.f, 5.f };
+    style.ScrollbarSize = 10.f;
+}
+
+void AppUI::renderSplitter(const char* id, float x, float y, float h,
+    float& target, bool invert, float minW, float maxW)
+{
+    ImGui::SetNextWindowPos({ x - 3.f, y }, ImGuiCond_Always);
+    ImGui::SetNextWindowSize({ 6.f, h }, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.f, 0.f });
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, { 0.f, 0.f, 0.f, 0.f });
+    ImGui::Begin(id, nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
+    ImGui::InvisibleButton("##grip", { 6.f, h });
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            { x - 1.f, y }, { x + 1.f, y + h }, IM_COL32(100, 140, 220, 220));
+    }
+    if (ImGui::IsItemActive())
+    {
+        splitterActive_ = true;
+        float dx = ImGui::GetIO().MouseDelta.x;
+        target = std::clamp(target + (invert ? -dx : dx), minW, maxW);
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
+void AppUI::handleGlobalShortcuts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Canvas undo/redo — only when no text widget owns the keyboard
+    // (the editor handles its own Ctrl+Z / Ctrl+Shift+Z when focused)
+    if (!io.WantTextInput && io.KeyCtrl)
+    {
+        if (!io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+            canvas_.undo();
+        else if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+            canvas_.redo();
+    }
+
+    // Ctrl+D — edit all occurrences of the selected text
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) &&
+        editor_.HasSelection())
+        openReplacePopup_ = true;
+}
+
+void AppUI::renderReplacePopup()
+{
+    if (openReplacePopup_)
+    {
+        findText_ = editor_.GetSelectedText();
+        if (!findText_.empty())
+        {
+            strncpy_s(replaceBuf_, findText_.c_str(), sizeof(replaceBuf_) - 1);
+            ImGui::OpenPopup("Edit All Occurrences");
+        }
+        openReplacePopup_ = false;
+    }
+
+    if (ImGui::BeginPopupModal("Edit All Occurrences", nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Replace every occurrence of \"%s\" with:", findText_.c_str());
+        ImGui::SetNextItemWidth(320.f);
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        bool enter = ImGui::InputText("##repl", replaceBuf_, sizeof(replaceBuf_),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::Button("Replace All", { 110.f, 0.f }) || enter)
+        {
+            editor_.ReplaceAll(findText_, replaceBuf_);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", { 90.f, 0.f }) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 }
 
 // ===========================================================================
@@ -269,16 +437,20 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
     ImGui::TextDisabled("Robot Start Position");
     ImGui::Spacing();
 
+    // Labels above the fields so they are never clipped by the canvas panel
+    ImGui::TextDisabled("Pos X");
     ImGui::SetNextItemWidth(btnW);
-    if (ImGui::InputFloat("Pos X##startX", &startingPosX_, 0.f, 0.f, "%.1f"))
+    if (ImGui::InputFloat("##startX", &startingPosX_, 0.f, 0.f, "%.1f"))
         robot_.reset(startingPosX_, startingPosY_, startingAngle_);
 
+    ImGui::TextDisabled("Pos Y");
     ImGui::SetNextItemWidth(btnW);
-    if (ImGui::InputFloat("Pos Y##startY", &startingPosY_, 0.f, 0.f, "%.1f"))
+    if (ImGui::InputFloat("##startY", &startingPosY_, 0.f, 0.f, "%.1f"))
         robot_.reset(startingPosX_, startingPosY_, startingAngle_);
 
+    ImGui::TextDisabled("Angle (deg)");
     ImGui::SetNextItemWidth(btnW);
-    if (ImGui::InputFloat("Angle##startA", &startingAngle_, 0.f, 0.f, "%.1f deg"))
+    if (ImGui::InputFloat("##startA", &startingAngle_, 0.f, 0.f, "%.1f"))
         robot_.reset(startingPosX_, startingPosY_, startingAngle_);
 
     ImGui::Spacing();
@@ -337,8 +509,8 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
 
     ImGui::Image(sceneRT_, sf::Vector2f{ disp.x, disp.y });
 
-    bool hovered = ImGui::IsItemHovered();
-    bool mouseNow = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    bool hovered = ImGui::IsItemHovered() && !splitterActive_;
+    bool mouseNow = ImGui::IsMouseDown(ImGuiMouseButton_Left) && !splitterActive_;
     ImVec2 mp = ImGui::GetMousePos();
 
     if (hovered)
@@ -512,9 +684,17 @@ void AppUI::renderCodePanel(float panelW, float panelH)
     case 3:  ImGui::TextColored({ 1.f,  0.4f, 0.35f, 1.f }, "✗  Compile failed – see output below"); break;
     }
 
+    // ── Auto compile toggle ───────────────────────────────────────────────
+    ImGui::SameLine();
+    ImGui::Checkbox("Auto", &autoCompile_);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Automatically compile & reload ~1.5 s after you stop typing");
+
     // ── Compile output log ────────────────────────────────────────────────
     const float logH = 120.f;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4{ 0.12f, 0.12f, 0.12f, 1.f });
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, darkTheme_
+        ? ImVec4{ 0.12f, 0.12f, 0.12f, 1.f }
+        : ImVec4{ 0.92f, 0.92f, 0.92f, 1.f });
     ImGui::BeginChild("##compileLog", { compileW, logH },
         ImGuiChildFlags_Border);
 
@@ -552,7 +732,27 @@ void AppUI::renderCodePanel(float panelW, float panelH)
     float edH = panelH - consumedH;
     if (edH < 80.f) edH = 80.f;
 
-    editor_.Render("##code_editor", ImVec2{ panelW - 16.f, edH });
+    // Wrap the editor in our own child so the font scale applies to the
+    // window the editor actually draws in.
+    ImGui::BeginChild("##edwrap", ImVec2{ panelW - 16.f, edH }, 0,
+        ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
+    ImGui::SetWindowFontScale(editorFontScale_);
+    editor_.SetImGuiChildIgnored(true);
+    editor_.SetHandleMouseInputs(!splitterActive_);
+    editor_.Render("##code_editor");
+    ImGui::EndChild();
+
+    // ── Auto compile (debounced) ─────────────────────────────────────────
+    if (editor_.IsTextChanged())
+        lastEditTime_ = ImGui::GetTime();
+    if (autoCompile_ && simStarted_ && lastEditTime_ > 0.0 &&
+        ImGui::GetTime() - lastEditTime_ > 1.5 &&
+        compileStatus_.load() != 1)
+    {
+        lastEditTime_ = -1.0;
+        saveCode();
+        startCompile(/*forRun=*/false);
+    }
 }
 
 // ===========================================================================

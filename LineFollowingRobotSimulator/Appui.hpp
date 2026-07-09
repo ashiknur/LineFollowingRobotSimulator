@@ -80,6 +80,30 @@ private:
     void renderCanvasPanel(float w, float h);
     void renderCodePanel(float w, float h);
 
+    // ── Menu bar / theme / layout ────────────────────────────────────────────
+    float renderMenuBar();              // returns menu bar height
+    void  applyTheme();                 // ImGui style + editor palette
+    void  renderSplitter(const char* id, float x, float y, float h, float& target,
+                         bool invert, float minW, float maxW);
+    void  handleGlobalShortcuts();      // canvas undo/redo, Ctrl+D popup open
+    void  renderReplacePopup();
+
+    bool  darkTheme_ = true;
+    float toolsW_ = 172.f;              // resizable panel widths
+    float codeW_ = 430.f;
+    bool  splitterActive_ = false;      // a splitter is being dragged
+                                        // (canvas/editor must ignore the mouse)
+    float editorFontScale_ = 1.0f;
+
+    // Ctrl+D edit-all-occurrences state
+    bool        openReplacePopup_ = false;
+    std::string findText_;
+    char        replaceBuf_[256] = {};
+
+    // Auto-compile (debounced, after edits stop)
+    bool   autoCompile_ = false;
+    double lastEditTime_ = -1.0;        // ImGui::GetTime() of last edit
+
     // ── Scene helper ─────────────────────────────────────────────────────────
     void buildScene();
 

@@ -14,6 +14,7 @@ Canvas::Canvas()
 // ---------------------------------------------------------------------------
 void Canvas::clear()
 {
+    pushUndoSnapshot();
     rt_.clear(sf::Color::White);
     rt_.display();
     stroke_.clear();
@@ -21,8 +22,47 @@ void Canvas::clear()
 }
 
 // ---------------------------------------------------------------------------
+// Undo / redo
+// ---------------------------------------------------------------------------
+void Canvas::pushUndoSnapshot()
+{
+    constexpr size_t MAX_UNDO = 20;   // ~2 MB per 700x700 snapshot
+    undoStack_.push_back(getImage());
+    if (undoStack_.size() > MAX_UNDO)
+        undoStack_.erase(undoStack_.begin());
+    redoStack_.clear();
+}
+
+void Canvas::restoreImage(const sf::Image& img)
+{
+    sf::Texture t;
+    if (!t.loadFromImage(img)) return;
+    rt_.clear(sf::Color::White);
+    rt_.draw(sf::Sprite(t));
+    rt_.display();
+}
+
+void Canvas::undo()
+{
+    if (undoStack_.empty()) return;
+    redoStack_.push_back(getImage());
+    restoreImage(undoStack_.back());
+    undoStack_.pop_back();
+}
+
+void Canvas::redo()
+{
+    if (redoStack_.empty()) return;
+    undoStack_.push_back(getImage());
+    restoreImage(redoStack_.back());
+    redoStack_.pop_back();
+}
+
+// ---------------------------------------------------------------------------
 void Canvas::mousePressed(sf::Vector2f pos)
 {
+    pushUndoSnapshot();   // one undo step per stroke/shape
+
     dragging_ = true;
     dragStart_ = pos;
     dragCur_ = pos;
@@ -32,7 +72,7 @@ void Canvas::mousePressed(sf::Vector2f pos)
     // Freehand / eraser: start dot
     if (tool == DrawTool::Freehand || tool == DrawTool::Eraser)
     {
-        sf::Color col = (tool == DrawTool::Eraser) ? sf::Color::White : penColor;
+        sf::Color col = (tool == DrawTool::Eraser) ? eraserColor() : penColor;
         sf::CircleShape dot(brushSize / 2.f);
         dot.setOrigin({ brushSize / 2.f, brushSize / 2.f });
         dot.setFillColor(col);
@@ -50,7 +90,7 @@ void Canvas::mouseMoved(sf::Vector2f pos)
 
     if (tool == DrawTool::Freehand || tool == DrawTool::Eraser)
     {
-        sf::Color col = (tool == DrawTool::Eraser) ? sf::Color::White : penColor;
+        sf::Color col = (tool == DrawTool::Eraser) ? eraserColor() : penColor;
         if (!stroke_.empty())
             drawThickSegment(stroke_.back(), pos, col);
         stroke_.push_back(pos);

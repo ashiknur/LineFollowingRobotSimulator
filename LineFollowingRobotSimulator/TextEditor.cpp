@@ -711,6 +711,10 @@ void TextEditor::HandleKeyboardInputs()
 
 		if (!IsReadOnly() && ctrl && !shift && !alt && ImGui::IsKeyPressed(ImGuiKey_Z))
 			Undo();
+		else if (!IsReadOnly() && ctrl && shift && !alt && ImGui::IsKeyPressed(ImGuiKey_Z))
+			Redo();
+		else if (!IsReadOnly() && ctrl && !shift && !alt && ImGui::IsKeyPressed(ImGuiKey_Slash))
+			ToggleComments();
 		else if (!IsReadOnly() && !ctrl && !shift && alt && ImGui::IsKeyPressed(ImGuiKey_Backspace))
 			Undo();
 		else if (!IsReadOnly() && ctrl && !shift && !alt && ImGui::IsKeyPressed(ImGuiKey_Y))
@@ -1977,6 +1981,121 @@ void TextEditor::Paste()
 		u.mAfter = mState;
 		AddUndo(u);
 	}
+}
+
+// Replaces the current selection (or inserts at the cursor) with aText,
+// recording a single undo step — same pattern as Paste().
+void TextEditor::ReplaceSelectedText(const std::string& aText)
+{
+	UndoRecord u;
+	u.mBefore = mState;
+
+	if (HasSelection())
+	{
+		u.mRemoved = GetSelectedText();
+		u.mRemovedStart = mState.mSelectionStart;
+		u.mRemovedEnd = mState.mSelectionEnd;
+		DeleteSelection();
+	}
+
+	u.mAdded = aText;
+	u.mAddedStart = GetActualCursorCoordinates();
+
+	InsertText(aText);
+
+	u.mAddedEnd = GetActualCursorCoordinates();
+	u.mAfter = mState;
+	AddUndo(u);
+}
+
+// Toggles "//" line comments on the selected lines (or the cursor line).
+// One undo step for the whole toggle.
+void TextEditor::ToggleComments()
+{
+	if (IsReadOnly())
+		return;
+
+	auto start = mState.mSelectionStart;
+	auto end = mState.mSelectionEnd;
+	if (end < start)
+		std::swap(start, end);
+
+	int firstLine = start.mLine;
+	int lastLine = end.mLine;
+	// A selection ending at column 0 of a line doesn't include that line
+	if (lastLine > firstLine && end.mColumn == 0)
+		--lastLine;
+
+	auto lines = GetTextLines();
+	if (firstLine >= (int)lines.size())
+		return;
+	lastLine = std::min(lastLine, (int)lines.size() - 1);
+
+	// Comment only if at least one non-empty line is currently uncommented
+	bool allCommented = true;
+	for (int i = firstLine; i <= lastLine; ++i)
+	{
+		const auto& l = lines[i];
+		auto p = l.find_first_not_of(" \t");
+		if (p != std::string::npos && l.compare(p, 2, "//") != 0)
+		{
+			allCommented = false;
+			break;
+		}
+	}
+
+	std::string block;
+	for (int i = firstLine; i <= lastLine; ++i)
+	{
+		std::string l = lines[i];
+		auto p = l.find_first_not_of(" \t");
+		if (allCommented)
+		{
+			if (p != std::string::npos && l.compare(p, 2, "//") == 0)
+				l.erase(p, (l.compare(p, 3, "// ") == 0) ? 3 : 2);
+		}
+		else if (p != std::string::npos)
+			l.insert(p, "// ");
+		block += l;
+		if (i != lastLine)
+			block += '\n';
+	}
+
+	SetSelection(Coordinates(firstLine, 0),
+		Coordinates(lastLine, GetLineMaxColumn(lastLine)));
+	ReplaceSelectedText(block);
+	SetSelection(Coordinates(firstLine, 0),
+		Coordinates(lastLine, GetLineMaxColumn(lastLine)));
+}
+
+// Replaces every occurrence of aFind in the document (one undo step).
+void TextEditor::ReplaceAll(const std::string& aFind, const std::string& aReplace)
+{
+	if (IsReadOnly() || aFind.empty())
+		return;
+
+	std::string text = GetText();
+	std::string result;
+	result.reserve(text.size());
+	size_t pos = 0, hit;
+	bool any = false;
+	while ((hit = text.find(aFind, pos)) != std::string::npos)
+	{
+		result.append(text, pos, hit - pos);
+		result += aReplace;
+		pos = hit + aFind.size();
+		any = true;
+	}
+	if (!any)
+		return;
+	result.append(text, pos, std::string::npos);
+
+	// GetText() appends a trailing '\n'; InsertText would add a line each time
+	if (!result.empty() && result.back() == '\n')
+		result.pop_back();
+
+	SelectAll();
+	ReplaceSelectedText(result);
 }
 
 bool TextEditor::CanUndo() const

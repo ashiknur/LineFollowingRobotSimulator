@@ -261,6 +261,11 @@ public:
 	void Undo(int aSteps = 1);
 	void Redo(int aSteps = 1);
 
+	// Toggle "//" comments on selected lines (Ctrl+/)
+	void ToggleComments();
+	// Replace all occurrences of aFind in the document (one undo step)
+	void ReplaceAll(const std::string& aFind, const std::string& aReplace);
+
 	static const Palette& GetDarkPalette();
 	static const Palette& GetLightPalette();
 	static const Palette& GetRetroBluePalette();
@@ -339,6 +344,7 @@ private:
 	void EnterCharacter(ImWchar aChar, bool aShift);
 	void Backspace();
 	void DeleteSelection();
+	void ReplaceSelectedText(const std::string& aText);
 	std::string GetWordUnderCursor() const;
 	std::string GetWordAt(const Coordinates& aCoords) const;
 	ImU32 GetGlyphColor(const Glyph& aGlyph) const;
