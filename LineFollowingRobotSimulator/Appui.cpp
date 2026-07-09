@@ -289,9 +289,11 @@ void AppUI::handleGlobalShortcuts()
 {
     ImGuiIO& io = ImGui::GetIO();
 
-    // Canvas undo/redo — only when no text widget owns the keyboard
-    // (the editor handles its own Ctrl+Z / Ctrl+Shift+Z when focused)
-    if (!io.WantTextInput && io.KeyCtrl)
+    // Canvas undo/redo — only when no text widget owns the keyboard.
+    // io.WantTextInput covers InputText fields, but the code editor only sets
+    // it during its own render (later in the frame), so also check the
+    // editor's focus state remembered from the previous frame.
+    if (!io.WantTextInput && !editorFocused_ && io.KeyCtrl)
     {
         if (!io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false))
             canvas_.undo();
@@ -740,6 +742,7 @@ void AppUI::renderCodePanel(float panelW, float panelH)
     editor_.SetImGuiChildIgnored(true);
     editor_.SetHandleMouseInputs(!splitterActive_);
     editor_.Render("##code_editor");
+    editorFocused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
     ImGui::EndChild();
 
     // ── Auto compile (debounced) ─────────────────────────────────────────

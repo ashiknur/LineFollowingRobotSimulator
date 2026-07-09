@@ -93,6 +93,8 @@ private:
     float codeW_ = 430.f;
     bool  splitterActive_ = false;      // a splitter is being dragged
                                         // (canvas/editor must ignore the mouse)
+    bool  editorFocused_ = false;       // editor had focus last frame — global
+                                        // Ctrl+Z must not also hit the canvas
     float editorFontScale_ = 1.0f;
 
     // Ctrl+D edit-all-occurrences state
