@@ -129,7 +129,9 @@
   <ItemGroup>
     <ClCompile Include="Appui.cpp" />
     <ClCompile Include="Canvas.cpp" />
+    <ClCompile Include="HostApi.cpp" />
     <ClCompile Include="Hotreload.cpp" />
+    <ClCompile Include="Paths.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Motor.cpp" />
     <ClCompile Include="Robot.cpp" />
@@ -146,7 +148,10 @@
     <ClInclude Include="Appui.hpp" />
     <ClInclude Include="Canvas.hpp" />
     <ClInclude Include="config.hpp" />
+    <ClInclude Include="HostApi.hpp" />
     <ClInclude Include="Hotreload.hpp" />
+    <ClInclude Include="LfrHostApi.h" />
+    <ClInclude Include="Paths.hpp" />
     <ClInclude Include="Math.hpp" />
     <ClInclude Include="Motor.hpp" />
     <ClInclude Include="Robot.hpp" />

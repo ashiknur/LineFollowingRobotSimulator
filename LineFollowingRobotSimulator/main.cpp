@@ -8,6 +8,8 @@
 #include "Robot.hpp"
 #include "SharedState.hpp"
 #include "HotReload.hpp"
+#include "HostApi.hpp"
+#include "Paths.hpp"
 #include "config.hpp"
 #include "AppUI.hpp"
 
@@ -17,6 +19,9 @@ void userThreadFunc(SharedState*, HotReload*);
 // ---------------------------------------------------------------------------
 int main()
 {
+    // Set up the per-user writable dir (user code, compiled DLLs, imgui.ini)
+    paths::ensureUserSources();
+
     const unsigned WIN_W = WIDTH + static_cast<unsigned>(172 + 430);
     const unsigned WIN_H = HEIGHT;
 
@@ -33,6 +38,10 @@ int main()
         return 1;
     }
 
+    // imgui.ini must live in the writable data dir, not next to the exe
+    static const std::string iniPath = paths::imguiIniPath();
+    ImGui::GetIO().IniFilename = iniPath.c_str();
+
     // ── Style tweaks ─────────────────────────────────────────────────────────
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowBorderSize = 1.f;
@@ -47,11 +56,11 @@ int main()
     SharedState shared;
 
     // HotReload manages compiling UserCode.cpp into a shared library at
-    // runtime and loading it via dlopen/LoadLibrary.
-    // sourceFile: path to UserCode.cpp (relative to CWD = project source dir)
-    // libOut:     base path for the generated .dll/.so (no extension)
-    HotReload hotreload("UserCode.cpp", "./usercode_hot");
-    hotreload.setSharedPtr(&shared);
+    // runtime and loading it via dlopen/LoadLibrary. Everything happens in
+    // the per-user data dir; the DLL talks back through a C callback table.
+    HotReload hotreload(paths::dataDir(), paths::dataDir() + "/usercode_hot");
+    LfrHostApi hostApi = makeHostApi(&shared);
+    hotreload.setHostApi(hostApi);
 
     AppUI ui(canvas, robot, shared, hotreload, window);
 

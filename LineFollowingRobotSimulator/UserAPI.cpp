@@ -3,7 +3,7 @@
 #include <thread>
 #include <chrono>
 
-SharedState* gShared = nullptr;   // definition\
+SharedState* gShared = nullptr;   // definition
 
 std::vector<int> readSensor()
 {

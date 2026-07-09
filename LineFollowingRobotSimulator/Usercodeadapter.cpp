@@ -10,7 +10,7 @@
 #ifdef LFR_HOTRELOAD
 
 #include "UserCode.hpp"   // void setup(); void loop();
-#include "UserAPI.hpp"
+#include "LfrHostApi.h"
 
 // On Windows the DLL symbols must be explicitly exported; on Linux/macOS
 // all symbols are visible by default when building with -shared.
@@ -21,15 +21,16 @@
 #endif
 
 // Declared in UserAPI_hotreload.cpp (compiled into the same shared lib)
-extern "C" void lfr_injectShared(void* ptr);
+extern "C" void lfr_injectHostApi(const LfrHostApi* api);
 
 extern "C"
 {
     // Called by HotReload::load() right after dlopen/LoadLibrary to hand
-    // over the SharedState* so the UserAPI functions can reach it.
-    LFR_EXPORT void lfr_setShared(void* ptr)
+    // over the host callback table so the UserAPI functions can reach the
+    // simulator. Pure C signature — safe across compilers.
+    LFR_EXPORT void lfr_setHostApi(const LfrHostApi* api)
     {
-        lfr_injectShared(ptr);
+        lfr_injectHostApi(api);
     }
 
     LFR_EXPORT void lfr_setup() { setup(); }

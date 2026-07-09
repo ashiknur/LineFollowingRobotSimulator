@@ -1,6 +1,7 @@
 #include "Robot.hpp"
 #include "Math.hpp"
 #include "config.hpp"
+#include "Paths.hpp"
 
 Robot::Robot()
     : position(100.f, 100.f),
@@ -9,7 +10,9 @@ Robot::Robot()
     texture(),
     sprite(texture)
 {
-    if (!texture.loadFromFile("lfr body.png"))
+    // Look next to the exe first (installed app), then the cwd (VS debugger)
+    if (!texture.loadFromFile(paths::exeDir() + "/LFR body.png") &&
+        !texture.loadFromFile("LFR body.png"))
         throw std::runtime_error("Failed to load robot texture");
 
     sprite.setTexture(texture, true);

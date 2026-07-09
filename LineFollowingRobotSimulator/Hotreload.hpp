@@ -2,6 +2,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include "LfrHostApi.h"
 
 // ---------------------------------------------------------------------------
 // HotReload
@@ -11,9 +12,9 @@
 // the old lib, recompiles, and loads the new one.
 //
 // Symbols exported by the shared lib:
-//   void  lfr_setup()          – called once after each successful load
-//   void  lfr_loop ()          – called every user-thread iteration
-//   void  lfr_setShared(void*) – receives the SharedState* cast to void*
+//   void  lfr_setup()                        – called once after each load
+//   void  lfr_loop ()                        – called every user-thread iteration
+//   void  lfr_setHostApi(const LfrHostApi*)  – receives the C callback table
 //
 // UserCode.cpp must implement setup() / loop() using the UserAPI as normal;
 // a thin adapter (UserCodeAdapter.cpp) that is compiled INTO the shared lib
@@ -29,8 +30,10 @@ struct CompileResult
 class HotReload
 {
 public:
-    explicit HotReload(const std::string& sourceFile = "UserCode.cpp",
-        const std::string& libOut = "./usercode_hot");
+    // srcDir: writable dir containing UserCode.cpp + support sources
+    // libOut: base path (no extension) for the generated .dll/.so
+    explicit HotReload(const std::string& srcDir,
+        const std::string& libOut);
 
     ~HotReload();
 
@@ -45,28 +48,28 @@ public:
     void callSetup();
     void callLoop();
 
-    // Shared pointer passed into the lib so UserAPI can reach SharedState
-    void setSharedPtr(void* p) { sharedPtr_ = p; }
+    // C callback table passed into the lib so UserAPI can reach the simulator
+    void setHostApi(const LfrHostApi& api) { hostApi_ = api; }
 
     // Set after compile() succeeds; user thread sees it and calls setup() once
     std::atomic<bool> reloadPending{ false };
 
 private:
-    std::string  sourceFile_;
+    std::string  srcDir_;      // dir containing UserCode.cpp + support sources
     std::string  libBase_;     // path without extension
     std::string  libPath_;     // actual .so / .dll path
     int          generation_;  // incremented each compile so the OS doesn't cache
 
     void* libHandle_ = nullptr;
-    void* sharedPtr_ = nullptr;
+    LfrHostApi hostApi_{};
 
     using SetupFn = void(*)();
     using LoopFn = void(*)();
-    using SetSharedFn = void(*)(void*);
+    using SetHostApiFn = void(*)(const LfrHostApi*);
 
-    SetupFn     fnSetup_ = nullptr;
-    LoopFn      fnLoop_ = nullptr;
-    SetSharedFn fnSetShared_ = nullptr;
+    SetupFn      fnSetup_ = nullptr;
+    LoopFn       fnLoop_ = nullptr;
+    SetHostApiFn fnSetHostApi_ = nullptr;
 
     void unload();
     bool load(const std::string& path);

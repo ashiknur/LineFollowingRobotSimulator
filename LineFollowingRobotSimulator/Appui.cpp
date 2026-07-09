@@ -1,5 +1,6 @@
 #include "AppUI.hpp"
 #include "config.hpp"
+#include "Paths.hpp"
 #include <imgui-SFML.h>
 #include <fstream>
 #include <sstream>
@@ -559,7 +560,7 @@ void AppUI::renderCodePanel(float panelW, float panelH)
 // ===========================================================================
 void AppUI::loadCode()
 {
-    std::ifstream f("UserCode.cpp");
+    std::ifstream f(paths::userCodePath());
     if (f.is_open())
     {
         std::stringstream ss;
@@ -596,7 +597,7 @@ void AppUI::loadCode()
 
 void AppUI::saveCode() const
 {
-    std::ofstream f("UserCode.cpp");
+    std::ofstream f(paths::userCodePath());
     if (f.is_open())
         f << editor_.GetText();
 }

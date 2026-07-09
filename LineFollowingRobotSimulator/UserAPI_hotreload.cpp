@@ -2,12 +2,18 @@
 //
 // Compiled ONLY into the hot-reload shared library (guarded by LFR_HOTRELOAD).
 // Provides readSensor() / setMotorSpeed() / delayMs() for UserCode.cpp,
-// forwarding through a SharedState* injected at load time.
+// forwarding through the C callback table (LfrHostApi) injected at load time.
+//
+// The DLL may be built by a different compiler than the main exe, so it must
+// never touch the exe's C++ objects directly — everything goes through the
+// plain C function pointers in LfrHostApi. The std::vector returned by
+// readSensor() is created here, with THIS compiler's STL, and never crosses
+// the DLL boundary.
 
 #ifdef LFR_HOTRELOAD
 
 #include "UserAPI.hpp"
-#include "SharedState.hpp"
+#include "LfrHostApi.h"
 #include <thread>
 #include <chrono>
 
@@ -17,16 +23,16 @@
 #  define LFR_EXPORT
 #endif
 
-// Local pointer – set by lfr_injectShared() which is called from
-// Usercodeadapter.cpp right after the library is loaded.
-static SharedState* gSharedLocal = nullptr;
+// Local copy of the host callback table – set by lfr_injectHostApi() which is
+// called from Usercodeadapter.cpp right after the library is loaded.
+static LfrHostApi gHost{};
 
 extern "C"
 {
     // Must be visible to Usercodeadapter.cpp (also in this shared lib)
-    LFR_EXPORT void lfr_injectShared(void* ptr)
+    LFR_EXPORT void lfr_injectHostApi(const LfrHostApi* api)
     {
-        gSharedLocal = static_cast<SharedState*>(ptr);
+        if (api) gHost = *api;
     }
 }
 
@@ -34,16 +40,17 @@ extern "C"
 
 std::vector<int> readSensor()
 {
-    if (!gSharedLocal) return {};
-    std::lock_guard<std::mutex> lock(gSharedLocal->sensorMutex);
-    return gSharedLocal->sensors;
+    if (!gHost.readSensors) return {};
+    int buf[64];
+    int n = gHost.readSensors(gHost.ctx, buf, 64);
+    if (n < 0) n = 0;
+    return std::vector<int>(buf, buf + n);
 }
 
 void setMotorSpeed(float left, float right)
 {
-    if (!gSharedLocal) return;
-    gSharedLocal->leftMotor = left;
-    gSharedLocal->rightMotor = right;
+    if (gHost.setMotorSpeed)
+        gHost.setMotorSpeed(gHost.ctx, left, right);
 }
 
 void delayMs(int ms)
