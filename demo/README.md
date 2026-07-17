@@ -5,9 +5,27 @@ A full-feature demonstration for the simulator.
 | File | What it is |
 |---|---|
 | `demo-track.png` | The track — load it with **File > Open Track...** |
+| `demo-track2.png` | Second track, circuit-diagram style: sine squiggle with a loop, zigzag column, diamond, two overlapping circles, dashed-rectangle passage, separate start/end squares. Start: X=100 Y=630 Angle=-90 |
 | `DemoUserCode.cpp` | The follower — paste into the editor (or copy over `%LOCALAPPDATA%\LineFollowingRobotSimulator\UserCode.cpp` and press Reload) |
 | `make-track.ps1` | Regenerates `demo-track.png` |
+| `make-track2.ps1` | Regenerates `demo-track2.png` |
 | `sim.py` | Offline replica of the app's physics/sensors used to tune the follower (needs Python + Pillow); writes `sim-path.png` with the driven path |
+
+## Checkpoints & scoring (Stats menu)
+
+The **Stats** menu opens the Run Statistics panel:
+
+- **Checkpoints** — add one by typing X / Y / Angle (or click *Use Robot
+  Pos* to copy the robot's current pose) and pressing *Add Checkpoint*.
+  They draw on the canvas as numbered circles with a heading tick; orange =
+  not yet reached, green = reached. The robot auto-reaches a checkpoint by
+  driving within 40 px of it. The **last checkpoint is the end point**.
+- **Skip (Ctrl+K)** teleports to the next checkpoint; **Restart (Ctrl+R)**
+  goes back to the last reached one (or the start). Both are counted.
+- A run starts when the sim starts (or *New Run*) and finishes when the
+  robot stands still for 2 seconds. Paused time is not counted.
+- Score (all five weights editable in the panel):
+  `score = b − s·skips − r·restarts − t + c (no skip/restart) + st (stopped at end)`
 
 ## Track features
 

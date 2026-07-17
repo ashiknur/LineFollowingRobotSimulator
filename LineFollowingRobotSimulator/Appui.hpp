@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <vector>
 
 #include "Canvas.hpp"
 #include "Robot.hpp"
@@ -128,4 +129,37 @@ private:
     float startingPosX_ = 100.f;
     float startingPosY_ = 100.f;
     float startingAngle_ = 0.f;
+
+    // ── Checkpoints & run statistics ─────────────────────────────────────────
+    struct Checkpoint { float x, y, angle; };
+
+    std::vector<Checkpoint> checkpoints_;
+    int    curCp_ = -1;           // last reached checkpoint (-1 = start)
+    int    skips_ = 0;
+    int    restarts_ = 0;
+    bool   runActive_ = false;
+    bool   runFinished_ = false;
+    float  runTime_ = 0.f;        // active (unpaused) run seconds
+    float  stillTime_ = 0.f;      // seconds the robot has been stationary
+    bool   stoppedAtEnd_ = false; // stopped near the last checkpoint
+    float  lastRobotX_ = 0.f, lastRobotY_ = 0.f;
+
+    // Score parameters (user editable in the Stats panel)
+    float scoreB_ = 100.f;   // base score            (b)
+    float scoreS_ = 10.f;    // penalty per skip      (s)
+    float scoreR_ = 5.f;     // penalty per restart   (r)
+    float scoreC_ = 50.f;    // clean-run bonus       (c)
+    float scoreSt_ = 20.f;   // stop-at-end bonus     (st)
+
+    bool  statsOpen_ = false;
+    float cpX_ = 100.f, cpY_ = 100.f, cpAngle_ = 0.f;   // add-checkpoint fields
+
+    void  beginRun();             // reset counters/timer; called on sim start
+    void  newRun();               // teleport to start + beginRun + re-setup()
+    void  doSkip();               // advance to next checkpoint (counted)
+    void  doRestartCp();          // back to current checkpoint (counted)
+    void  updateRunTracking();    // per-frame: timer, auto-progress, finish
+    float computeScore(bool& clean, float& t) const;
+    void  renderStatsWindow();
+    void  drawCheckpointMarkers();
 };

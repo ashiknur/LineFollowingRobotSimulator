@@ -1,6 +1,8 @@
 #include "AppUI.hpp"
 #include "config.hpp"
 #include "Paths.hpp"
+#include "Math.hpp"
+#include <cstdio>
 #include <imgui-SFML.h>
 #include <fstream>
 #include <sstream>
@@ -152,7 +154,10 @@ bool AppUI::render()
         compilingForRun_ = false;
         firstRun_ = true;       // main.cpp will spawn the user thread
         shared_.paused = false;   // unblock the thread once it starts
+        beginRun();               // the scored run starts with the sim
     }
+
+    updateRunTracking();
 
     const float menuH = renderMenuBar();
     handleGlobalShortcuts();
@@ -210,6 +215,8 @@ bool AppUI::render()
         /*invert=*/true, 280.f, std::max(280.f, ww - toolsW_ - 250.f));
 
     renderReplacePopup();
+    if (statsOpen_)
+        renderStatsWindow();
 
     // ── Track open/save error modal ───────────────────────────────────────
     if (!trackIoError_.empty() && !ImGui::IsPopupOpen("Track Error"))
@@ -270,6 +277,19 @@ float AppUI::renderMenuBar()
             if (ImGui::MenuItem("Edit All Occurrences...", "Ctrl+D", false,
                 editor_.HasSelection()))
                 openReplacePopup_ = true;
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Stats"))
+        {
+            ImGui::MenuItem("Statistics Panel", nullptr, &statsOpen_);
+            ImGui::Separator();
+            bool canSkip = simStarted_ && curCp_ + 1 < (int)checkpoints_.size();
+            if (ImGui::MenuItem("Skip to Next Checkpoint", "Ctrl+K", false, canSkip))
+                doSkip();
+            if (ImGui::MenuItem("Restart from Checkpoint", "Ctrl+R", false, simStarted_))
+                doRestartCp();
+            if (ImGui::MenuItem("New Run", nullptr, false, simStarted_))
+                newRun();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View"))
@@ -367,6 +387,15 @@ void AppUI::handleGlobalShortcuts()
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) &&
         editor_.HasSelection())
         openReplacePopup_ = true;
+
+    // Checkpoint shortcuts (not while typing)
+    if (!io.WantTextInput && io.KeyCtrl)
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_K, false))
+            doSkip();
+        else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
+            doRestartCp();
+    }
 }
 
 void AppUI::renderReplacePopup()
@@ -401,6 +430,280 @@ void AppUI::renderReplacePopup()
             ImGui::IsKeyPressed(ImGuiKey_Escape))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
+    }
+}
+
+// ===========================================================================
+// Checkpoints & run statistics
+// ===========================================================================
+void AppUI::beginRun()
+{
+    curCp_ = -1;
+    skips_ = restarts_ = 0;
+    runActive_ = true;
+    runFinished_ = false;
+    stoppedAtEnd_ = false;
+    runTime_ = 0.f;
+    stillTime_ = 0.f;
+    lastRobotX_ = robot_.getPosition().x;
+    lastRobotY_ = robot_.getPosition().y;
+}
+
+void AppUI::newRun()
+{
+    robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+    beginRun();
+    hotreload_.reloadPending = true;   // re-run setup(): fresh controller state
+    shared_.paused = false;
+}
+
+void AppUI::doSkip()
+{
+    if (!simStarted_ || curCp_ + 1 >= (int)checkpoints_.size())
+        return;
+    ++curCp_;
+    const Checkpoint& cp = checkpoints_[curCp_];
+    robot_.reset(cp.x, cp.y, cp.angle);
+    if (runActive_) ++skips_;
+    // NOTE: deliberately no setup() re-run here — the controller must keep
+    // its state (e.g. a "left the start square" flag) across the teleport.
+    stillTime_ = 0.f;
+}
+
+void AppUI::doRestartCp()
+{
+    if (!simStarted_)
+        return;
+    if (curCp_ >= 0)
+    {
+        const Checkpoint& cp = checkpoints_[curCp_];
+        robot_.reset(cp.x, cp.y, cp.angle);
+    }
+    else
+        robot_.reset(startingPosX_, startingPosY_, startingAngle_);
+    if (runActive_) ++restarts_;
+    stillTime_ = 0.f;
+    if (runFinished_)                  // restarting after a finish resumes the
+    {                                  // run; the controller needs a setup()
+        runFinished_ = false;          // re-run to clear its finished latch
+        runActive_ = true;
+        hotreload_.reloadPending = true;
+    }
+    shared_.paused = false;
+}
+
+void AppUI::updateRunTracking()
+{
+    if (!runActive_ || !simStarted_)
+        return;
+
+    float dt = ImGui::GetIO().DeltaTime;
+    if (shared_.paused.load())
+        return;                        // paused time doesn't count
+
+    runTime_ += dt;
+
+    sf::Vector2f p = robot_.getPosition();
+
+    // Auto-advance when the robot drives near the next checkpoint
+    if (curCp_ + 1 < (int)checkpoints_.size())
+    {
+        const Checkpoint& next = checkpoints_[curCp_ + 1];
+        float dx = p.x - next.x, dy = p.y - next.y;
+        if (dx * dx + dy * dy < 40.f * 40.f)
+            ++curCp_;
+    }
+
+    // Finish detection: the robot has been stationary for 2 s
+    float moved = std::fabs(p.x - lastRobotX_) + std::fabs(p.y - lastRobotY_);
+    lastRobotX_ = p.x; lastRobotY_ = p.y;
+
+    if (moved < 0.05f && runTime_ > 3.f)
+    {
+        stillTime_ += dt;
+        if (stillTime_ >= 2.f)
+        {
+            runActive_ = false;
+            runFinished_ = true;
+            runTime_ -= stillTime_;    // don't count the stationary tail
+            if (!checkpoints_.empty())
+            {
+                const Checkpoint& last = checkpoints_.back();
+                float dx = p.x - last.x, dy = p.y - last.y;
+                stoppedAtEnd_ = (dx * dx + dy * dy < 70.f * 70.f);
+            }
+            else
+                stoppedAtEnd_ = true;  // no checkpoints: any clean stop counts
+            statsOpen_ = true;         // pop the results
+        }
+    }
+    else
+        stillTime_ = 0.f;
+}
+
+float AppUI::computeScore(bool& clean, float& t) const
+{
+    clean = (skips_ == 0 && restarts_ == 0);
+    t = runTime_;
+    float score = scoreB_
+        - scoreS_ * (float)skips_
+        - scoreR_ * (float)restarts_
+        - t
+        + (clean ? scoreC_ : 0.f)
+        + (stoppedAtEnd_ ? scoreSt_ : 0.f);
+    return score;
+}
+
+void AppUI::renderStatsWindow()
+{
+    ImGui::SetNextWindowPos({ 240.f, 60.f }, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize({ 380.f, 0.f }, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Run Statistics", &statsOpen_,
+        ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
+
+    // ── Live run state ────────────────────────────────────────────────────
+    const char* status = !simStarted_ ? "waiting for Run"
+        : runFinished_ ? "FINISHED"
+        : runActive_ ? "running" : "-";
+    ImGui::Text("Status:      %s", status);
+    ImGui::Text("Time:        %.1f s", runTime_);
+    ImGui::Text("Skips:       %d", skips_);
+    ImGui::Text("Restarts:    %d", restarts_);
+    ImGui::Text("Checkpoint:  %d / %d", curCp_ + 1, (int)checkpoints_.size());
+
+    ImGui::Spacing();
+    bool canSkip = simStarted_ && curCp_ + 1 < (int)checkpoints_.size();
+    if (!simStarted_) ImGui::BeginDisabled();
+    if (ImGui::Button("New Run", { 100.f, 0.f })) newRun();
+    ImGui::SameLine();
+    if (ImGui::Button("Restart (Ctrl+R)", { 130.f, 0.f })) doRestartCp();
+    ImGui::SameLine();
+    if (!canSkip && simStarted_) ImGui::BeginDisabled();
+    if (ImGui::Button("Skip (Ctrl+K)", { 110.f, 0.f })) doSkip();
+    if (!canSkip && simStarted_) ImGui::EndDisabled();
+    if (!simStarted_) ImGui::EndDisabled();
+
+    // ── Score parameters ──────────────────────────────────────────────────
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Score Settings", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        const float w = 110.f;
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Base score (b)", &scoreB_, 0.f, 0.f, "%.1f");
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Skip penalty (s)", &scoreS_, 0.f, 0.f, "%.1f");
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Restart penalty (r)", &scoreR_, 0.f, 0.f, "%.1f");
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Clean-run bonus (c)", &scoreC_, 0.f, 0.f, "%.1f");
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Stop-at-end bonus (st)", &scoreSt_, 0.f, 0.f, "%.1f");
+        ImGui::TextDisabled("score = b - s*skips - r*restarts - t\n"
+            "        + c (no skip/restart) + st (stopped at end)");
+    }
+
+    // ── Checkpoints ───────────────────────────────────────────────────────
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Checkpoints", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        const float w = 64.f;
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("X", &cpX_, 0.f, 0.f, "%.0f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Y", &cpY_, 0.f, 0.f, "%.0f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(w);
+        ImGui::InputFloat("Angle", &cpAngle_, 0.f, 0.f, "%.0f");
+
+        if (ImGui::Button("Add Checkpoint", { 130.f, 0.f }))
+            checkpoints_.push_back({ cpX_, cpY_, cpAngle_ });
+        ImGui::SameLine();
+        if (ImGui::Button("Use Robot Pos", { 120.f, 0.f }))
+        {
+            cpX_ = robot_.getPosition().x;
+            cpY_ = robot_.getPosition().y;
+            cpAngle_ = robot_.getAngle();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Copy the robot's current position/angle\n"
+                "into the fields above");
+
+        for (int i = 0; i < (int)checkpoints_.size(); ++i)
+        {
+            ImGui::PushID(i);
+            const Checkpoint& cp = checkpoints_[i];
+            bool reached = (i <= curCp_);
+            ImGui::TextColored(reached
+                ? ImVec4{ 0.3f, 0.85f, 0.3f, 1.f }
+                : ImVec4{ 0.95f, 0.65f, 0.2f, 1.f },
+                "#%d  (%.0f, %.0f)  %.0f deg", i + 1, cp.x, cp.y, cp.angle);
+            ImGui::SameLine(230.f);
+            if (ImGui::SmallButton("Go"))
+            {
+                robot_.reset(cp.x, cp.y, cp.angle);
+                hotreload_.reloadPending = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Del"))
+            {
+                checkpoints_.erase(checkpoints_.begin() + i);
+                if (curCp_ >= i) --curCp_;
+                ImGui::PopID();
+                break;
+            }
+            ImGui::PopID();
+        }
+        if (checkpoints_.empty())
+            ImGui::TextDisabled("(none — the last checkpoint you add\n"
+                " is treated as the end point)");
+    }
+
+    // ── Result ────────────────────────────────────────────────────────────
+    if (runFinished_)
+    {
+        ImGui::Spacing();
+        ImGui::Separator();
+        bool clean; float t;
+        float score = computeScore(clean, t);
+        ImGui::Text("Run complete in %.1f s", t);
+        ImGui::Text("  base                %+.1f", scoreB_);
+        ImGui::Text("  skips     %d x %-5.1f %+.1f", skips_, scoreS_, -scoreS_ * skips_);
+        ImGui::Text("  restarts  %d x %-5.1f %+.1f", restarts_, scoreR_, -scoreR_ * restarts_);
+        ImGui::Text("  time                %+.1f", -t);
+        ImGui::Text("  clean-run bonus     %+.1f", clean ? scoreC_ : 0.f);
+        ImGui::Text("  stop-at-end bonus   %+.1f", stoppedAtEnd_ ? scoreSt_ : 0.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, { 0.35f, 0.9f, 1.f, 1.f });
+        ImGui::Text("SCORE: %.1f", score);
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::End();
+}
+
+void AppUI::drawCheckpointMarkers()
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int i = 0; i < (int)checkpoints_.size(); ++i)
+    {
+        const Checkpoint& cp = checkpoints_[i];
+        ImVec2 c = canvasToScreen({ cp.x, cp.y });
+        ImU32 col = (i <= curCp_)
+            ? IM_COL32(60, 200, 60, 230)
+            : IM_COL32(240, 160, 40, 230);
+        dl->AddCircle(c, 10.f, col, 20, 2.5f);
+        // Heading tick
+        float a = deg2rad(cp.angle);
+        ImVec2 tip = canvasToScreen({ cp.x + 22.f * std::cos(a),
+                                      cp.y + 22.f * std::sin(a) });
+        dl->AddLine(c, tip, col, 2.5f);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", i + 1);
+        dl->AddText({ c.x + 8.f, c.y - 16.f }, col, buf);
     }
 }
 
@@ -642,6 +945,8 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
         default: break;
         }
     }
+
+    drawCheckpointMarkers();
 }
 
 // ===========================================================================
