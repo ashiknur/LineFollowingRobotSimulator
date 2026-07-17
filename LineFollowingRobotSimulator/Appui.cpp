@@ -506,6 +506,12 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
     if (ImGui::SliderInt("##sensorCount", &sensorCount, 2, 15, "%d sensors"))
         robot_.setSensorCount(sensorCount);
 
+    float sensorSpacing = robot_.getSensorSpacing();
+    ImGui::SetNextItemWidth(btnW);
+    if (ImGui::SliderFloat("##sensorSpacing", &sensorSpacing, 2.f, 30.f,
+        "gap %.0f px"))
+        robot_.setSensorSpacing(sensorSpacing);
+
     // ── Robot starting position ─────────────────────────────────────────────
     ImGui::Spacing();
     ImGui::Separator();

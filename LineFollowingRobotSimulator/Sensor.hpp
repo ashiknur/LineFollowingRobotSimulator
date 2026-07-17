@@ -18,6 +18,9 @@ public:
     void setCount(int n) { sensorCount = n; }
     int  getCount() const { return sensorCount; }
 
+    void  setSpacing(float s) { sensorSpacing = s; }
+    float getSpacing() const { return sensorSpacing; }
+
 private:
     int sensorCount;
     float sensorOffset;

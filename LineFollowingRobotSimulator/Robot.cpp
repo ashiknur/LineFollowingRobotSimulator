@@ -38,6 +38,16 @@ int Robot::getSensorCount() const
     return sensors.getCount();
 }
 
+void Robot::setSensorSpacing(float s)
+{
+    sensors.setSpacing(std::clamp(s, 2.f, 30.f));
+}
+
+float Robot::getSensorSpacing() const
+{
+    return sensors.getSpacing();
+}
+
 void Robot::update(float dt, const sf::Image& img)
 {
     // Differential-drive kinematics. Wheel speeds are px/s; the robot's

@@ -33,6 +33,10 @@ public:
     void setSensorCount(int n);
     int  getSensorCount() const;
 
+    // Lateral distance between adjacent sensors, px (UI slider)
+    void  setSensorSpacing(float s);
+    float getSensorSpacing() const;
+
 private:
     sf::Vector2f position;
     float        angle;
