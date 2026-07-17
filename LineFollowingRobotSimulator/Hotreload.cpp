@@ -312,9 +312,40 @@ CompileResult HotReload::compile()
 
         if (tc.kind == Toolchain::Gxx)
         {
+            // A gcc driver invoked by full path still searches COMPILER_PATH,
+            // GCC_EXEC_PREFIX, and finally the system PATH for as/ld/cc1plus
+            // if its own bundled copies aren't found first. On a machine that
+            // already has some other compiler installed (Arduino IDE,
+            // PlatformIO, an old MinGW, ...), a stray as.exe earlier on PATH
+            // can get picked up instead of ours — it silently assembles in
+            // the wrong mode (e.g. 32-bit) and produces bizarre "bad register
+            // name" errors instead of a clean "not found". Force everything
+            // to resolve inside the bundled toolchain only:
+            //   - clear GCC_EXEC_PREFIX / COMPILER_PATH so nothing over-
+            //     rides the driver's own search
+            //   - replace PATH with just our bin dir + bare OS system dirs
+            //     (still needed for cmd.exe itself and DLL loading)
+            //   - pass -B<bin> so the driver's *own* search checks our dir
+            //     with top priority, independent of PATH
+            const std::string bin = fs::path(tc.path).parent_path().string();
+            bat << "set \"GCC_EXEC_PREFIX=\"\r\n";
+            bat << "set \"COMPILER_PATH=\"\r\n";
+            bat << "set \"CPATH=\"\r\n";
+            bat << "set \"C_INCLUDE_PATH=\"\r\n";
+            bat << "set \"CPLUS_INCLUDE_PATH=\"\r\n";
+            bat << "set \"LIBRARY_PATH=\"\r\n";
+            bat << "set \"PATH=" << bin << ";%SystemRoot%\\System32;%SystemRoot%\"\r\n";
+
             // -static* : the produced DLL must not depend on libstdc++/
             // libwinpthread DLLs living inside the toolchain dir.
+            // No trailing backslash inside the quotes: a backslash immediately
+            // before a closing " is parsed by Windows argv rules as an
+            // escaped literal quote, not a path separator — that leaves the
+            // argument unterminated and silently swallows everything after
+            // it into one string (verified: this exact bug ate the rest of
+            // the g++ command line in testing).
             bat << "\"" << tc.path << "\""
+                << " -B\"" << bin << "\""
                 << " -std=c++17 -O2 -shared"
                 << " -DLFR_HOTRELOAD"
                 << " \"" << src << "\\UserCode.cpp\""
