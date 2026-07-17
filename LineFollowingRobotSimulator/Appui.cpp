@@ -8,12 +8,43 @@
 #include <algorithm>
 #include <chrono>
 
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#  include <commdlg.h>
+#  pragma comment(lib, "comdlg32.lib")
+#endif
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 static ImU32 sfColorToIM(sf::Color c)
 {
     return IM_COL32(c.r, c.g, c.b, 200);
+}
+
+// Native PNG open/save dialog. Returns "" if the user cancels.
+static std::string pngFileDialog(sf::RenderWindow& window, bool save)
+{
+#if defined(_WIN32)
+    char file[MAX_PATH] = "track.png";
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = window.getNativeHandle();
+    ofn.lpstrFilter = "PNG image (*.png)\0*.png\0All files (*.*)\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = "png";
+    ofn.Flags = OFN_NOCHANGEDIR |
+        (save ? OFN_OVERWRITEPROMPT : (OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST));
+
+    BOOL ok = save ? GetSaveFileNameA(&ofn) : GetOpenFileNameA(&ofn);
+    return ok ? std::string(file) : std::string();
+#else
+    (void)window; (void)save;
+    return {};
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +211,21 @@ bool AppUI::render()
 
     renderReplacePopup();
 
+    // ── Track open/save error modal ───────────────────────────────────────
+    if (!trackIoError_.empty() && !ImGui::IsPopupOpen("Track Error"))
+        ImGui::OpenPopup("Track Error");
+    if (ImGui::BeginPopupModal("Track Error", nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted(trackIoError_.c_str());
+        if (ImGui::Button("OK", { 90.f, 0.f }))
+        {
+            trackIoError_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     return firstRun_;
 }
 
@@ -191,6 +237,22 @@ float AppUI::renderMenuBar()
     float h = 0.f;
     if (ImGui::BeginMainMenuBar())
     {
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Open Track..."))
+            {
+                std::string p = pngFileDialog(window_, /*save=*/false);
+                if (!p.empty() && !canvas_.loadFrom(p))
+                    trackIoError_ = "Could not open: " + p;
+            }
+            if (ImGui::MenuItem("Save Track As..."))
+            {
+                std::string p = pngFileDialog(window_, /*save=*/true);
+                if (!p.empty() && !canvas_.saveTo(p))
+                    trackIoError_ = "Could not save: " + p;
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Edit"))
         {
             if (ImGui::MenuItem("Undo Code", "Ctrl+Z", false, editor_.CanUndo()))
@@ -432,6 +494,17 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
     if (ImGui::Button("Clear canvas", { btnW, 30.f }))
         canvas_.clear();
     ImGui::PopStyleColor(2);
+
+    // ── Sensors ─────────────────────────────────────────────────────────────
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("Sensors");
+    ImGui::Spacing();
+
+    int sensorCount = robot_.getSensorCount();
+    ImGui::SetNextItemWidth(btnW);
+    if (ImGui::SliderInt("##sensorCount", &sensorCount, 2, 15, "%d sensors"))
+        robot_.setSensorCount(sensorCount);
 
     // ── Robot starting position ─────────────────────────────────────────────
     ImGui::Spacing();

@@ -15,6 +15,9 @@ public:
 
     const std::vector<sf::Vector2f>& getPositions() const;
 
+    void setCount(int n) { sensorCount = n; }
+    int  getCount() const { return sensorCount; }
+
 private:
     int sensorCount;
     float sensorOffset;

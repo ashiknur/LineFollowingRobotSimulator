@@ -102,6 +102,9 @@ private:
     std::string findText_;
     char        replaceBuf_[256] = {};
 
+    // Track open/save failure message (shown as a modal until dismissed)
+    std::string trackIoError_;
+
     // Auto-compile (debounced, after edits stop)
     bool   autoCompile_ = false;
     double lastEditTime_ = -1.0;        // ImGui::GetTime() of last edit

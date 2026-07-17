@@ -30,16 +30,19 @@ std::vector<int> Sensor::readSensors(
     float forward = deg2rad(robotAngle);
     float perp = forward + 3.1415926f / 2.f;
 
-    int half = sensorCount / 2;
-
-    for (int i = -half; i <= half; ++i)
+    // Center the array on the robot's forward axis. (The old
+    // "for i in [-count/2, count/2]" loop emitted count+1 sensors for even
+    // counts.) s[0] stays the leftmost sensor.
+    for (int i = 0; i < sensorCount; ++i)
     {
+        float lateral = (i - (sensorCount - 1) * 0.5f) * sensorSpacing;
+
         sf::Vector2f pos{
             robotPos.x + std::cos(forward) * sensorOffset +
-            std::cos(perp) * (i * sensorSpacing),
+            std::cos(perp) * lateral,
 
             robotPos.y + std::sin(forward) * sensorOffset +
-            std::sin(perp) * (i * sensorSpacing)
+            std::sin(perp) * lateral
         };
 
         positions.push_back(pos);

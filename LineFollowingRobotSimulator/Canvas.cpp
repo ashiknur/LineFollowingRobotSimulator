@@ -22,6 +22,37 @@ void Canvas::clear()
 }
 
 // ---------------------------------------------------------------------------
+// Save / load
+// ---------------------------------------------------------------------------
+bool Canvas::saveTo(const std::string& path) const
+{
+    return rt_.getTexture().copyToImage().saveToFile(path);
+}
+
+bool Canvas::loadFrom(const std::string& path)
+{
+    sf::Image img;
+    if (!img.loadFromFile(path))
+        return false;
+
+    sf::Texture t;
+    if (!t.loadFromImage(img))
+        return false;
+
+    pushUndoSnapshot();   // loading a track is undoable
+
+    sf::Sprite s(t);
+    sf::Vector2u ts = t.getSize();
+    sf::Vector2u cs = rt_.getSize();
+    s.setScale({ (float)cs.x / (float)ts.x, (float)cs.y / (float)ts.y });
+
+    rt_.clear(sf::Color::White);
+    rt_.draw(s);
+    rt_.display();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Undo / redo
 // ---------------------------------------------------------------------------
 void Canvas::pushUndoSnapshot()

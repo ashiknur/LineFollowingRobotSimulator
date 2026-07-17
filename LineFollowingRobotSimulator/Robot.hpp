@@ -29,6 +29,10 @@ public:
         angle = angleDeg;
     }
 
+    // Number of line sensors (UI slider, 2..15)
+    void setSensorCount(int n);
+    int  getSensorCount() const;
+
 private:
     sf::Vector2f position;
     float        angle;

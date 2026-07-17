@@ -37,6 +37,10 @@ public:
 
     void clear();   // reset to white
 
+    // ── Save / load the drawing as a PNG ────────────────────────────────────
+    bool saveTo(const std::string& path) const;
+    bool loadFrom(const std::string& path);   // scales to canvas size; undoable
+
     // ── Undo / redo (snapshot per stroke / clear) ───────────────────────────
     void undo();
     void redo();

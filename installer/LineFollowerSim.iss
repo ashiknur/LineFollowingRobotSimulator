@@ -20,7 +20,7 @@
 ;     (full variant only)
 
 #define AppName        "Line Following Robot Simulator"
-#define AppVersion     "1.1.1"
+#define AppVersion     "1.2.0"
 #define AppPublisher   "Ashiknur"
 #define AppExe         "LineFollowingRobotSimulator.exe"
 #define ReleaseDir     "..\LineFollowingRobotSimulator\x64\Release"

@@ -28,15 +28,39 @@ std::vector<int> Robot::readSensors(const sf::Image& img)
     return sensors.readSensors(img, position, angle);
 }
 
+void Robot::setSensorCount(int n)
+{
+    sensors.setCount(std::clamp(n, 2, 15));
+}
+
+int Robot::getSensorCount() const
+{
+    return sensors.getCount();
+}
+
 void Robot::update(float dt, const sf::Image& img)
 {
-    float avg = (leftMotor.getSpeed() + rightMotor.getSpeed()) * 0.5f;
-    float rot = (-rightMotor.getSpeed() + leftMotor.getSpeed()) * 0.05f;
+    // Differential-drive kinematics. Wheel speeds are px/s; the robot's
+    // center moves with the average speed and turns with
+    //   omega = (vL - vR) / WHEEL_BASE   [rad/s]
+    // This makes the turning center land where physics says it should:
+    //   vR = 0        -> pivot exactly on the right wheel
+    //   vL = -vR      -> spin in place about the robot's center
+    float vL = leftMotor.getSpeed();
+    float vR = rightMotor.getSpeed();
 
-    angle += rot * dt * (180.f / 3.1415926f);
+    float v = 0.5f * (vL + vR);
+    float omega = (vL - vR) / WHEEL_BASE;
 
-    position.x += avg * std::cos(deg2rad(angle)) * dt;
-    position.y += avg * std::sin(deg2rad(angle)) * dt;
+    // Midpoint integration: advance along the heading at the middle of this
+    // step's rotation, so arcs (and wheel pivots) stay on the true circle
+    // instead of drifting outward.
+    float dAngle = omega * dt;
+    float midHeading = deg2rad(angle) + dAngle * 0.5f;
+
+    position.x += v * std::cos(midHeading) * dt;
+    position.y += v * std::sin(midHeading) * dt;
+    angle += rad2deg(dAngle);
 
     position.x = std::clamp(position.x, 0.f, (float)WIDTH);
     position.y = std::clamp(position.y, 0.f, (float)HEIGHT);
