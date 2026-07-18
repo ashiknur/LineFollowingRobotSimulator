@@ -1,0 +1,435 @@
+%SbrTa
+\setstretch{1.5}
+\setlength{\parskip}{1.5em}
+\chapter{Methodology}
+\vspace{-5cm}
+
+\section{Introduction}
+
+An autonomous ground vehicle known as a Line Following Robot (LFR) recognizes and tracks a predetermined course, usually a contrasting line drawn on a level surface. Rather than building a physical robot, this project develops a \textit{software simulator} in which the robot, the track and the sensors are modelled numerically and rendered in real time, and in which the user's control program is compiled and reloaded live while the simulation keeps running. Designing such a system requires decisions at several levels: the physics that move the robot, the sensor model that samples the track, the runtime-compilation pipeline that turns edited source into running behaviour, and the graphical interface through which the whole process is driven.
+
+The foundation of the simulator is therefore the selection of suitable technology and a clean separation of concerns. This stage entails developing the software architecture (physics engine, sensor model, motor model, and a compiler-agnostic hot-reload pipeline) and implementing the user-facing interface (an integrated code editor, a track-drawing canvas, sensor and checkpoint configuration, and real-time performance feedback), all inside a single window. Section~3.2 describes the overall project design and system workflow. Section~3.3 explains the control interface exposed to user code and the reference control algorithm used to navigate the demonstration tracks. Section~3.4 presents the software architecture of the system. Section~3.5 defines the system requirements, Section~3.6 lists the tools used, and Section~3.7 summarises the chapter.
+
+% ─────────────────────────────────────────────
+\section{Project Design}
+% ─────────────────────────────────────────────
+The Line Following Robot Simulator is divided into several interacting subsystems: the \textit{Simulation Engine}, the \textit{Robot Model}, the \textit{Sensor Model}, the \textit{Motor Model}, the \textit{Hot-Reload Compiler}, and the \textit{User Code Interface}, all presented through an integrated \textit{Dear ImGui} graphical panel. A distinctive property of the design is that the user's control code is not linked into the main program: it is compiled at runtime into a separate shared library and communicates with the engine only through a small, pure-C interface. This keeps the user code sandboxed and — importantly — allows it to be built by a completely different compiler from the one that built the application. Figure~\ref{fig:system_overview} shows the high-level system overview.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=1.3cm and 2.0cm,
+    box/.style={rectangle, draw=black, rounded corners=4pt,
+                minimum width=3.2cm, minimum height=1.0cm,
+                text centered, font=\small},
+    arrow/.style={-Stealth, thick}
+]
+% Nodes
+\node[box, fill=blue!15, align=center] (user)
+{Integrated Editor \\ (UserCode.cpp)};
+
+\node[box, fill=orange!20, below=of user, align=center] (compiler)
+{Hot-Reload Compiler \\ (bundled g++)};
+\node[box, fill=green!15, below=of compiler, align=center] (dll)
+{User DLL \\ (usercode\_hot\_N.dll)};
+
+\node[box, fill=red!15, below=of dll, align=center] (engine)
+{Simulation Engine \\ (main + user thread)};
+
+\node[box, fill=purple!15, left=of engine, align=center] (robot)
+{Robot \& Motor \\ Model};
+
+\node[box, fill=cyan!15, right=of engine, align=center] (sensor)
+{Sensor \\ Model};
+
+\node[box, fill=yellow!20, below=of engine, align=center] (render)
+{SFML + ImGui \\ Renderer};
+
+% Arrows
+\draw[arrow] (user)     -- node[right,font=\tiny]{compile} (compiler);
+\draw[arrow] (compiler) -- node[right,font=\tiny]{output} (dll);
+\draw[arrow] (dll)      -- node[right,font=\tiny]{load (C-ABI)} (engine);
+\draw[arrow] (engine)   -- (robot);
+\draw[arrow] (engine)   -- (sensor);
+\draw[arrow] (robot)    -- node[above,font=\tiny]{state} (engine);
+\draw[arrow] (sensor)   -- node[above,font=\tiny]{data}  (engine);
+\draw[arrow] (engine)   -- (render);
+\end{tikzpicture}
+\caption{Line Following Robot Simulator -- System Overview}
+\label{fig:system_overview}
+\end{figure}
+
+% ── Flowchart ──────────────────────────────
+\subsubsection{Simulation Loop Flowchart}
+The simulator uses two cooperating threads that communicate through a small shared-state object guarded by a mutex and atomics. The \textit{render thread} runs the graphical loop at the display refresh rate: it samples the sensors from the canvas image, applies the motor speeds most recently produced by the user code, advances the physics by one time-step, and redraws the window. The \textit{user thread} independently and repeatedly executes the hot-loaded \texttt{loop()} function, reading sensor values and writing motor speeds through the API. A short-lived \textit{compile thread} is spawned only when the user requests a recompile, so that the interface never freezes while the compiler runs. Figure~\ref{fig:sim_flowchart} illustrates the render-loop side of this process.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.7cm,
+    startstop/.style={rectangle, rounded corners=8pt, draw, fill=gray!30,
+                      minimum width=3.7cm, minimum height=0.75cm,
+                      text centered, font=\small},
+    process/.style={rectangle, draw, fill=blue!12,
+                    minimum width=3.7cm, minimum height=0.75cm,
+                    text centered, font=\small},
+    decision/.style={diamond, draw, fill=orange!20, aspect=2.5,
+                     text centered, font=\small, inner sep=1pt},
+    arrow/.style={-Stealth, thick}
+]
+\node[startstop]  (start)   {Start};
+\node[process, below=of start, align=center] (init)
+{Initialise Engine,\\Compile \& Load DLL};
+\node[process, below=of init, align=center] (sensor)
+{Sample Sensors\\from Canvas};
+\node[process, below=of sensor, align=center] (motor)
+{Apply Latest\\Motor Speeds};
+\node[process, below=of motor]  (physics) {Update Physics / Pose};
+\node[process, below=of physics, align=center] (render)
+{Render Frame\\(SFML + ImGui)};
+\node[decision, below=of render, align=center] (reload)
+{Recompile\\Requested?};
+
+\node[process, right=4.2cm of reload, align=center] (recomp)
+{Recompile \&\\Hot-Swap DLL};
+
+\node[decision, below=of reload, align=center] (running)
+{Window\\Open?};
+\node[startstop,  below=of running] (stop)    {Stop};
+
+\draw[arrow] (start)   -- (init);
+\draw[arrow] (init)    -- (sensor);
+\draw[arrow] (sensor)  -- (motor);
+\draw[arrow] (motor)   -- (physics);
+\draw[arrow] (physics) -- (render);
+\draw[arrow] (render)  -- (reload);
+\draw[arrow] (reload)  -- node[above,font=\small]{Yes} (recomp);
+\draw[arrow] (recomp)  |- (sensor);
+\draw[arrow] (reload)  -- node[right,font=\small]{No}  (running);
+\draw[arrow] (running) -- node[right,font=\small]{No}  (stop);
+\draw[arrow] (running.west) -- ++(-2.4,0) |- node[left,font=\small]{Yes} (sensor.west);
+\end{tikzpicture}
+\caption{Render-Loop Flowchart (the user thread runs \texttt{loop()} concurrently)}
+\label{fig:sim_flowchart}
+\end{figure}
+
+% ── Hot-Reload Subsystem ────────────────────
+\subsubsection{Hot-Reload Compiler Design}
+The hot-reload subsystem allows the user to edit control code inside the application's built-in editor and see the updated behaviour without restarting the simulation. When the user presses \textbf{Run} (first start), presses \textbf{Compile \& Reload}, or enables the \textbf{Auto} option (which recompiles a short time after typing stops), the editor's text is written to \texttt{UserCode.cpp} in a per-user data directory and a compile is launched on a background thread. The compiler used is a self-contained \textbf{MinGW-w64 g++} toolchain that ships with the application, so no separate development tools need to be installed on the target machine. The produced library exposes only three \texttt{extern "C"} entry points, and the engine hands it a table of C function pointers; because no C++ objects cross this boundary, the DLL can be built by a different compiler than the host program. Figure~\ref{fig:hotreload} shows the pipeline.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.5cm and 1.6cm,
+    box/.style={rectangle, draw, rounded corners=3pt,
+                minimum width=3.4cm, minimum height=0.8cm,
+                text centered, font=\small},
+    arrow/.style={-Stealth, thick}
+]
+\node[box, fill=yellow!20, align=center] (edit)
+{User edits code in\\the integrated editor};
+
+\node[box, fill=blue!15, below=of edit, align=center] (save)
+{Run / Compile \& Reload\\(or Auto) $\rightarrow$ save};
+
+\node[box, fill=orange!15, below=of save, align=center] (bat)
+{Locate bundled toolchain,\\isolate environment};
+
+\node[box, fill=green!15, below=of bat, align=center] (cl)
+{g++ compiles the three\\sources to a static DLL};
+
+\node[box, fill=red!15, below=of cl, align=center] (load)
+{Engine unloads old DLL,\\loads new, injects C-ABI};
+
+\node[box, fill=purple!15, below=of load, align=center] (cont)
+{setup() runs once;\\loop() resumes new logic};
+
+\foreach \from/\to in {edit/save, save/bat, bat/cl, cl/load, load/cont}
+    \draw[arrow] (\from) -- (\to);
+\end{tikzpicture}
+\caption{Hot-Reload Compiler Pipeline}
+\label{fig:hotreload}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Control Interface and Reference Algorithm}
+% ─────────────────────────────────────────────
+The simulator deliberately does \textbf{not} impose a control strategy. The user's \texttt{loop()} function may contain any C++ logic; it interacts with the robot only through a compact API:
+
+\begin{itemize}
+    \item \texttt{std::vector<int> readSensor()} --- returns the current binary sensor readings (one entry per sensor, \texttt{1} = over the line);
+    \item \texttt{void setMotorSpeed(float left, float right)} --- sets the two wheel speeds;
+    \item \texttt{void delayMs(int ms)} --- paces the control loop.
+\end{itemize}
+
+The number of sensors (configurable from 2 to 15) and the spacing between them are set from the interface, so the same control code can be exercised against different sensor arrays. The canonical control law for this class of problem is the \textbf{PID (Proportional-Integral-Derivative)} controller. From the sensor readings a lateral error signal $e(t)$ is formed (the position of the line relative to the centre of the sensor array), and the controller adjusts the differential wheel speeds according to:
+
+\begin{equation}
+    u(t) = K_p \, e(t) \;+\; K_i \int_0^t e(\tau)\,d\tau \;+\; K_d \,\frac{de(t)}{dt}
+    \label{eq:pid}
+\end{equation}
+
+\noindent where $K_p$, $K_i$ and $K_d$ are the proportional, integral and derivative gains, and $u(t)$ is applied differentially so that $v_L = v_{\text{base}} + u$ and $v_R = v_{\text{base}} - u$. Figure~\ref{fig:pid_block} shows the closed-loop block diagram.
+
+The reference follower supplied with the simulator uses a proportional–derivative (PD) core of this form for smooth line-tracking, augmented with a small state machine that recognises the harder features of the demonstration track --- sharp right-angle corners, dotted gaps, an inverted (white-on-black) section, and the filled start/end marker --- and reacts to each appropriately. This shows that the API is expressive enough for both textbook PID control and more elaborate strategies.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1.4cm,
+    block/.style={rectangle, draw, fill=blue!12,
+                  minimum width=2.2cm, minimum height=0.8cm,
+                  text centered, font=\small},
+    sum/.style={circle, draw, minimum size=0.6cm, font=\small},
+    arrow/.style={-Stealth, thick}
+]
+\node[sum] (sum) {$+$};
+
+\node[block, right=of sum, align=center] (pid)
+{PID / PD\\Controller};
+
+\node[block, right=of pid, align=center] (plant)
+{Robot\\Motors};
+
+\node[block, right=of plant, align=center] (sensor)
+{Sensor\\Array};
+
+\node[block, below=1cm of pid, align=center] (setpt)
+{Setpoint\\(centre line)};
+
+\coordinate (fb_right) at ($(sensor.east)+(0.8,0)$);
+\coordinate (fb_down)  at ($(fb_right)+(0,-2.1)$);
+
+\draw[arrow] (setpt)   -| node[above left,font=\tiny]{$r$} (sum);
+\draw[arrow] (sum)     -- node[above,font=\tiny]{$e$} (pid);
+\draw[arrow] (pid)     -- node[above,font=\tiny]{$u$} (plant);
+\draw[arrow] (plant)   -- node[above,font=\tiny]{pose} (sensor);
+\draw[arrow] (sensor)  -- (fb_right) -- (fb_down) -- node[right,font=\tiny]{$y$} (setpt);
+\node at ($(sum.north)+(0,0.3)$) [font=\tiny] {$-$};
+\end{tikzpicture}
+\caption{Closed-Loop Block Diagram for Line Following}
+\label{fig:pid_block}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Software Architecture}
+% ─────────────────────────────────────────────
+The simulator is built in \textbf{C++17} and uses \textbf{SFML~3} for real-time 2D rendering, \textbf{Dear ImGui} (through ImGui-SFML) for the control panel, and \textbf{ImGuiColorTextEdit} for the syntax-highlighted code editor. The sources fall into three groups: the \textit{application} (window, UI, engine), the \textit{user-facing runtime} (the code compiled into the hot-reload DLL), and the \textit{boundary} between them. Table~\ref{tab:files} summarises the role of each principal file.
+
+\begin{table}[htbp]
+\centering
+\caption{Principal Source File Descriptions}
+\label{tab:files}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{|p{4.8cm}|p{9.2cm}|}
+\hline
+\textbf{File} & \textbf{Description} \\ \hline
+\texttt{main.cpp}            & Entry point; creates the SFML window, spawns the user thread, and runs the render/physics loop. \\ \hline
+\texttt{Appui.cpp / .hpp}    & The whole ImGui interface: menu bar, drawing tools, canvas, code editor, sensor/checkpoint controls, and run statistics. \\ \hline
+\texttt{Canvas.cpp / .hpp}   & The drawable track: brush tools, undo/redo, and PNG save/load. \\ \hline
+\texttt{Robot.cpp / .hpp}    & Robot pose, differential-drive physics, and sensor configuration. \\ \hline
+\texttt{Sensor.cpp / .hpp}   & Samples the canvas under each sensor and returns binary readings. \\ \hline
+\texttt{Motor.cpp / .hpp}    & Simple per-wheel speed model. \\ \hline
+\texttt{Hotreload.cpp / .hpp}& Locates the bundled toolchain, compiles the user sources to a DLL, and hot-swaps it into the running engine. \\ \hline
+\texttt{HostApi.cpp / .hpp}, \texttt{LfrHostApi.h} & The pure-C boundary: the exe fills a table of function pointers the DLL calls back through. \\ \hline
+\texttt{Usercodeadapter.cpp} & Compiled into the DLL; exports \texttt{lfr\_setup / lfr\_loop / lfr\_setHostApi}. \\ \hline
+\texttt{UserAPI\_hotreload.cpp} & Compiled into the DLL; implements \texttt{readSensor() / setMotorSpeed() / delayMs()} over the C boundary. \\ \hline
+\texttt{UserCode.cpp / .hpp} & User-written control logic (\texttt{setup()} and \texttt{loop()}), compiled into the hot-reload DLL. \\ \hline
+\texttt{Paths.cpp / .hpp}    & Resolves the per-user writable data directory and template sources. \\ \hline
+\texttt{SharedState.hpp}, \texttt{UserThread.cpp}, \texttt{UserMain.cpp} & Thread-shared state and the user-thread driver that calls \texttt{loop()}. \\ \hline
+\end{tabular}
+\end{table}
+
+% ─────────────────────────────────────────────
+\section{System Requirements}
+% ─────────────────────────────────────────────
+System requirements specify the functionalities, features and constraints of the Line Following Robot Simulator from a technical perspective.
+
+\begin{enumerate}
+    \item The simulator must provide a real-time 2D rendering environment at the display refresh rate using SFML, drawing the robot, track and sensor states, together with an integrated ImGui control panel in the same window.
+
+    \item The system must implement a hot-reload mechanism that recompiles the user's control code into a shared library at runtime and hot-swaps it into the running simulation without stopping it, triggered by the \textbf{Run}, \textbf{Compile \& Reload}, or \textbf{Auto} controls.
+
+    \item The user code and the application must communicate only through a pure-C interface (a table of function pointers), so that the hot-reload library can be built by a compiler different from the one that built the application.
+
+    \item The application must ship with a self-contained compiler toolchain and must locate it at runtime, so that runtime compilation works on a target machine with no development tools installed.
+
+    \item The sensor model must produce binary readings by thresholding the brightness of the canvas beneath each sensor, and the number of sensors (2--15) and their spacing must be configurable from the interface.
+
+    \item The motor model must accept independent left and right wheel speeds and convert them, through a differential-drive kinematic model, into translation and rotation of the robot.
+
+    \item The interface must allow the user to draw, clear, and save/load tracks; to configure the robot's start pose; and to define checkpoints (a point and a heading) that support skipping and restarting, with per-run statistics and a configurable score.
+
+    \item The build system must use C++17 or newer, as required by SFML~3, for both the main executable and the hot-reload library, and the application must be distributable through a Windows installer.
+\end{enumerate}
+
+% ─────────────────────────────────────────────
+\section{Used Tools}
+% ─────────────────────────────────────────────
+This project uses a combination of hardware and software tools to implement, simulate and evaluate the line following robot.
+
+\subsection{Hardware Tools}
+The simulator runs entirely in software, so the hardware requirements are minimal. No sensors, motors, or microcontrollers are needed. The only physical component involved in development and testing was a standard Windows laptop.
+
+\subsubsection{Development PC (Windows x64)}
+The simulator runs on a Windows 10/11 64-bit machine. The host PC provides CPU cycles for the render loop, the concurrent user thread, and the background compiler. A multi-core processor is recommended so that runtime compilation does not contend with rendering.
+
+\subsubsection{Physical Line Following Robot (Reference Platform)}
+The simulated robot is modelled after a two-wheeled differential-drive robot equipped with a row of downward-facing infrared reflectance sensors. The physical platform informed the sensor and motion model and provided a sanity check for the tuned control gains.
+
+\subsection{Software Tools}
+The software side of the project is built entirely on free, widely available tools.
+
+\subsubsection{C++17}
+The entire simulator is written in \textbf{C++17}, the minimum standard required by SFML~3. Both the application and the hot-reload library are built to this standard.
+
+\subsubsection{SFML 3 and Dear ImGui}
+\textbf{SFML~3} provides 2D rendering, window management and timing (\texttt{sf::RenderWindow}, \texttt{sf::RenderTexture}, \texttt{sf::Sprite}, \texttt{sf::Texture}, \texttt{sf::Clock}). \textbf{Dear ImGui}, bridged through \textbf{ImGui-SFML}, provides the immediate-mode control panel, and \textbf{ImGuiColorTextEdit} provides the in-application syntax-highlighted editor.
+
+\subsubsection{Microsoft Visual Studio and vcpkg (Application Build)}
+The main application is built in \textbf{Visual Studio} with the MSVC compiler, and its third-party libraries (SFML and ImGui-SFML) are supplied by \textbf{vcpkg} for the \texttt{x64-windows} triplet through vcpkg's MSBuild integration.
+
+\subsubsection{Bundled MinGW-w64 Toolchain (Runtime Compilation)}
+Runtime compilation of the user's control code uses a self-contained \textbf{MinGW-w64 g++} toolchain (derived from \texttt{w64devkit}) that is shipped inside the installer. Because the hot-reload boundary is pure C, this toolchain can differ from the MSVC compiler that built the application. At compile time the environment is isolated (the toolchain's own sub-tools are pinned) so that any other compilers already present on the machine cannot interfere. If the bundled toolchain is absent, the system falls back to a Visual Studio installation located via \texttt{vswhere} on developer machines.
+
+\subsubsection{Inno Setup (Distribution)}
+The application is packaged with \textbf{Inno Setup} into two installers built from one script: a full offline installer that bundles the toolchain, and a slim installer that downloads the toolchain during setup. User code, compiled libraries and interface settings are kept in a per-user data directory so that the program runs correctly when installed under \texttt{Program Files}.
+
+% ─────────────────────────────────────────────
+\section{Summary}
+% ─────────────────────────────────────────────
+The Line Following Robot Simulator is a real-time, Windows-native application built in C++17 with SFML~3 for rendering and Dear ImGui for its control panel. The system models a differential-drive robot with a configurable row of infrared sensors and lets the user write arbitrary control code --- a PID/PD controller being the canonical choice. Its defining feature is a compiler-agnostic hot-reload architecture: the user's code, edited inside the application, is compiled at runtime into a shared library by a bundled MinGW toolchain and hot-swapped into the live simulation across a pure-C boundary, without stopping it. The design further separates the render thread from the user-control thread, ships everything needed to compile inside a Windows installer, and stores per-user data outside the installation directory so the program is fully portable.
+
+Chapter~4 gives the outcome of implementing this system. It walks through the finished application from start-up to live simulation, demonstrates the track canvas, sensor configuration, hot-reload behaviour (including the compile-error case), the checkpoint and scoring system, and then measures the system's performance in terms of frame rate, reload time, sensor accuracy and physics behaviour. It also gives a candid account of where the current version still falls short.
+
+%SbrTa
+\setstretch{1.5}
+\setlength{\parskip}{1.5em}
+\chapter{Result and Discussion}
+\vspace{-5cm}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+% ─────────────────────────────────────────────────────────────────────────────
+
+This chapter presents the results of the Line Following Robot Simulator (LFRS) --- what the finished system looks like, how it behaves in real use, and where it still has limitations. The discussion covers the main parts of the simulator: the canvas for drawing and loading tracks, the configurable robot and sensor model, the compiler-agnostic hot-reload pipeline, and the Dear ImGui control panel with its checkpoint and scoring tools. It also assesses how well the system meets the goals set out in the previous chapters.
+
+LFRS does not impose any particular control strategy; that is left to the user. The simulator's job is to provide a stable, fast, and easy-to-use environment in which any control code can be written, tested and updated with as little friction as possible. That is the standard by which the results here are judged. Section~4.2 presents the system output, including start-up behaviour, track drawing, sensor configuration, simulation execution, hot-reload functionality, and the checkpoint/scoring system. Section~4.3 evaluates system performance in terms of rendering, compile time, sensor accuracy and physics simulation. Section~4.4 summarises the chapter.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{System Output}
+% ─────────────────────────────────────────────────────────────────────────────
+When the simulator is launched it opens a single window and hands control to the user immediately. The following subsections walk through each stage of a normal session.
+
+\subsection{Startup and Initial State}
+
+On start-up an SFML window opens with three panels: the drawing-tools panel on the left, a large track canvas in the centre, and the code editor with its compile controls on the right. A menu bar (\textbf{File}, \textbf{Edit}, \textbf{Stats}, \textbf{View}) sits across the top. The canvas is initially blank with a white background, the robot rests at its default start pose, and the editor is pre-loaded with a template control program. Figure~\ref{fig:startup} shows the application at start-up.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=.95\textwidth]{img/starting.png}
+    \caption{Simulator at startup --- drawing tools, blank canvas, and code editor}
+    \label{fig:startup}
+\end{figure}
+
+\subsection{Track Drawing}
+
+The user draws a track by clicking and dragging on the canvas. The drawing-tools panel offers a freehand brush, an eraser, and straight-line, filled-rectangle and circle tools, together with a black/white colour choice and a brush-size slider. The eraser automatically paints the background colour, and the canvas supports multi-level undo and redo. A track can also be saved to, or opened from, a PNG file through the \textbf{File} menu, so complex courses can be prepared once and reused. Any shape that can be drawn is a valid track --- straight lines, gentle curves, hairpins and closed loops all work. Figure~\ref{fig:track_drawing} shows a track being drawn.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/track_draw.png}
+    \caption{Drawing a track on the canvas}
+    \label{fig:track_drawing}
+\end{figure}
+
+\subsection{Sensor Configuration}
+
+Before or during a run the user can set the number of sensors (from 2 to 15) and the spacing between them using two sliders, and can set the robot's start position and heading. The sensor array is drawn on the front of the robot as a row of markers, so the effect of a wider or narrower array is immediately visible. This makes it possible to test the same control code against different sensor configurations without changing any source. Figure~\ref{fig:sensors} shows the sensor and start-pose controls.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/sensors.png}
+    \caption{Configurable sensor count and spacing, and robot start pose}
+    \label{fig:sensors}
+\end{figure}
+
+\subsection{Simulation Running}
+When the user presses \textbf{Run}, the control code is compiled and the robot begins to move. Each frame the sensor array samples the pixels of the canvas beneath the robot's leading edge, the readings are passed to the user's \texttt{loop()}, and the robot's pose is updated from the motor speeds the code returns. The sensor markers change colour in real time to show which sensors are currently over the line. Figure~\ref{fig:running} shows the robot following a drawn track.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/running.png}
+    \caption{Simulation running with the robot following a drawn track}
+    \label{fig:running}
+\end{figure}
+
+\subsection{Hot-Reload in Action}
+
+The hot-reload mechanism is what makes the simulator genuinely useful for iterative development. The user edits the control program in the integrated editor and, on pressing \textbf{Compile \& Reload} (or with \textbf{Auto} enabled, shortly after they stop typing), the code is recompiled and the new logic is swapped into the running simulation. A compiler-output panel below the editor reports the result of each attempt: on success it shows a ``compile succeeded --- code reloaded'' status, and the robot's behaviour changes without the simulation ever stopping. Figure~\ref{fig:hotreload} shows the panel after a successful reload.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/hot_reload.png}
+    \caption{Compiler output panel after a successful hot-reload}
+    \label{fig:hotreload}
+\end{figure}
+
+If the edited code contains a compile error, the old library stays loaded and the simulation keeps running with the previous version of the control logic. The compiler's error messages are shown directly in the panel, so the user never has to look at a separate terminal. Figure~\ref{fig:compile_error} shows this state.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/compilation_error.png}
+    \caption{Compiler output panel showing an error --- the previous DLL remains active}
+    \label{fig:compile_error}
+\end{figure}
+
+\subsection{Checkpoints and Run Statistics}
+
+For longer or harder tracks the \textbf{Stats} menu opens a Run Statistics panel. The user adds a checkpoint by giving a point and a heading (or by capturing the robot's current pose), and each checkpoint is drawn on the canvas as a numbered marker that turns from orange to green once reached. During a run the robot can be teleported forward to the next checkpoint (\textit{skip}) or back to the last one reached (\textit{restart}); both actions are counted. When the robot comes to rest at the end, the panel reports the elapsed time, the number of skips and restarts, and a final score computed from user-editable weights:
+\[
+\text{score} = b - s\cdot(\#\text{skips}) - r\cdot(\#\text{restarts}) - t + c + s_t,
+\]
+where $b$ is a base score, $t$ the completion time, $c$ a bonus for a clean run with no skips or restarts, and $s_t$ a bonus for stopping at the end point. Figure~\ref{fig:stats} shows the panel with the score breakdown after a completed run.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.95\textwidth]{img/stats.png}
+    \caption{Run Statistics panel with checkpoints and the final score breakdown}
+    \label{fig:stats}
+\end{figure}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Performance Evaluation}
+% ─────────────────────────────────────────────────────────────────────────────
+With the system output covered, it is worth looking at the numbers behind it. The following subsections measure the simulator across the four areas that matter most for day-to-day use: rendering smoothness, hot-reload speed, sensor reliability, and physics correctness.
+
+\subsection{Rendering Performance}
+
+On the development machine (Intel Core~i5, 8\,GB RAM, 1080p monitor) the render loop holds the display refresh rate without dropping frames. SFML draws the canvas, the robot sprite and the sensor overlay, and ImGui-SFML draws the control panel, with no measurable overhead. Because the control code runs on a separate thread and compilation runs on a third, short-lived thread, neither the user's \texttt{loop()} nor a recompile disturbs the frame rate.
+
+\subsection{Hot-Reload Compile Time}
+
+A typical control program of around 50--150 lines compiles and reloads in roughly one to two seconds on the development machine, using the bundled MinGW toolchain. This includes launching the compiler, building and statically linking the library, unloading the previous DLL and loading the new one. Because the produced library is statically linked, it depends on no files outside the toolchain, which is what makes it safe to hot-swap repeatedly. This turnaround is fast enough to change how development feels: saving a change and watching the robot's behaviour update within a couple of seconds is qualitatively different from the multi-minute cycle of flashing physical hardware.
+
+\subsection{Sensor Model Accuracy}
+
+The sensor model samples the canvas beneath each sensor and thresholds its brightness, so a sensor over a dark line reads \texttt{1} and one over the light background reads \texttt{0}. Using a brightness threshold rather than an exact colour match makes the reading robust to the slightly grey pixels that appear at line edges. Generating the demonstration tracks without anti-aliasing removes those grey edges altogether and makes the readings crisp; because the classifier is threshold-based, hand-drawn tracks with soft edges are still read correctly in the great majority of cases. The configurable sensor count and spacing also let the user trade robustness against agility --- more, wider-spaced sensors detect corners earlier, while fewer, closer sensors track fine detail.
+
+\subsection{Robot Physics}
+
+The differential-drive kinematic model behaves as expected: equal wheel speeds produce straight-line motion, unequal speeds produce a turn, stopping one wheel makes the robot pivot about that wheel, and running the wheels in opposite directions makes it spin about its own centre. The model integrates the pose at the midpoint of each step's rotation, so arcs and pivots stay on their true circles instead of drifting outward. It is intentionally simple --- there is no wheel slip, inertia, or motor lag --- which is appropriate for testing control logic in a short iteration cycle. One consequence of the simplification is that very high wheel speeds can rotate the robot noticeably in a single time-step; keeping speeds within a sensible range avoids this.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Summary}
+% ─────────────────────────────────────────────────────────────────────────────
+
+The Line Following Robot Simulator achieves its aims. The track canvas draws and loads tracks, the robot drives on them as drawn, the configurable sensor array reads the canvas reliably, and the hot-reload system compiles and swaps in new user code in one to two seconds without stopping the simulation. The ImGui panel gives the user the drawing tools, sensor and start-pose controls, compiler feedback, checkpoints and scoring all in the same window as the simulation.
+
+The biggest impact comes not from any single feature but from the overall speed of the loop the system provides: the time from writing a change to seeing it drive on the canvas is essentially the time it takes to save the file. That is the promise the simulator makes, and it delivers on it. The compiler-agnostic hot-reload boundary and the bundled toolchain further mean the program runs, and can recompile user code, on an ordinary Windows machine with no development tools installed.
+
+Several features that were absent from earlier versions are now present: tracks can be saved and loaded as images, the sensor count and spacing are configurable, and a checkpoint-and-scoring system supports structured, repeatable runs. Remaining limitations are mostly matters of fidelity rather than function --- the physics omits slip and inertia, and very sharp features on a hand-drawn track can still challenge a simple reactive controller --- and these are candidates for future work.
+
+Chapter~5 brings the report to a close. It reviews what was built, reflects on the design decisions that worked and those that did not, and summarises the limitations and planned improvements from a finished-project perspective.
+
+\clearpage
