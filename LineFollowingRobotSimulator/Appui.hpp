@@ -154,6 +154,13 @@ private:
     bool  statsOpen_ = false;
     float cpX_ = 100.f, cpY_ = 100.f, cpAngle_ = 0.f;   // add-checkpoint fields
 
+    // Mouse placement: click the canvas to drop the point, drag out to aim
+    // the heading, release to commit. Right-click a marker to delete it.
+    bool         cpPlaceMode_ = false;   // armed from the Stats panel/menu
+    bool         cpDragging_ = false;   // press-drag in progress
+    sf::Vector2f cpDragStart_{};        // canvas coords of the press
+    sf::Vector2f cpDragCur_{};          // canvas coords of the cursor
+
     void  beginRun();             // reset counters/timer; called on sim start
     void  newRun();               // teleport to start + beginRun + re-setup()
     void  doSkip();               // advance to next checkpoint (counted)

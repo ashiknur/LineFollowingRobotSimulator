@@ -282,6 +282,11 @@ float AppUI::renderMenuBar()
         if (ImGui::BeginMenu("Stats"))
         {
             ImGui::MenuItem("Statistics Panel", nullptr, &statsOpen_);
+            if (ImGui::MenuItem("Place Checkpoint with Mouse", nullptr,
+                &cpPlaceMode_))
+            {
+                if (cpPlaceMode_) statsOpen_ = true;
+            }
             ImGui::Separator();
             bool canSkip = simStarted_ && curCp_ + 1 < (int)checkpoints_.size();
             if (ImGui::MenuItem("Skip to Next Checkpoint", "Ctrl+K", false, canSkip))
@@ -395,6 +400,14 @@ void AppUI::handleGlobalShortcuts()
             doSkip();
         else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
             doRestartCp();
+    }
+
+    // Esc leaves checkpoint placement mode
+    if (cpPlaceMode_ && !io.WantTextInput &&
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    {
+        cpDragging_ = false;
+        cpPlaceMode_ = false;
     }
 }
 
@@ -633,6 +646,24 @@ void AppUI::renderStatsWindow()
             ImGui::SetTooltip("Copy the robot's current position/angle\n"
                 "into the fields above");
 
+        // ── Mouse placement ───────────────────────────────────────────────
+        if (cpPlaceMode_)
+            ImGui::PushStyleColor(ImGuiCol_Button, { 0.15f, 0.55f, 0.85f, 1.f });
+        if (ImGui::Button(cpPlaceMode_ ? "Placing... (click to stop)"
+            : "Place with Mouse", { 256.f, 0.f }))
+            cpPlaceMode_ = !cpPlaceMode_;
+        if (cpPlaceMode_)
+            ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Click the canvas to drop a checkpoint, then\n"
+                "drag out to aim its direction and release.\n"
+                "Right-click a marker to delete it.\n"
+                "Click again (or pick a drawing tool) to stop.");
+        if (cpPlaceMode_)
+            ImGui::TextDisabled("Click = point, drag = direction.\n"
+                "Right-click a marker deletes it.\n"
+                "Drawing is paused while placing.");
+
         for (int i = 0; i < (int)checkpoints_.size(); ++i)
         {
             ImGui::PushID(i);
@@ -685,6 +716,29 @@ void AppUI::renderStatsWindow()
     ImGui::End();
 }
 
+// Circle + arrow showing a checkpoint's point and heading
+static void drawCpArrow(ImDrawList* dl, ImVec2 c, ImVec2 tip, ImU32 col,
+    float thick)
+{
+    dl->AddCircle(c, 10.f, col, 20, thick);
+    dl->AddLine(c, tip, col, thick);
+
+    // Arrow head
+    float dx = tip.x - c.x, dy = tip.y - c.y;
+    float len = std::sqrt(dx * dx + dy * dy);
+    if (len > 1.f)
+    {
+        dx /= len; dy /= len;
+        float hx = -dy, hy = dx;              // perpendicular
+        const float hl = 8.f, hw = 4.5f;
+        dl->AddTriangleFilled(
+            tip,
+            { tip.x - dx * hl + hx * hw, tip.y - dy * hl + hy * hw },
+            { tip.x - dx * hl - hx * hw, tip.y - dy * hl - hy * hw },
+            col);
+    }
+}
+
 void AppUI::drawCheckpointMarkers()
 {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -695,15 +749,37 @@ void AppUI::drawCheckpointMarkers()
         ImU32 col = (i <= curCp_)
             ? IM_COL32(60, 200, 60, 230)
             : IM_COL32(240, 160, 40, 230);
-        dl->AddCircle(c, 10.f, col, 20, 2.5f);
-        // Heading tick
         float a = deg2rad(cp.angle);
-        ImVec2 tip = canvasToScreen({ cp.x + 22.f * std::cos(a),
-                                      cp.y + 22.f * std::sin(a) });
-        dl->AddLine(c, tip, col, 2.5f);
+        ImVec2 tip = canvasToScreen({ cp.x + 26.f * std::cos(a),
+                                      cp.y + 26.f * std::sin(a) });
+        drawCpArrow(dl, c, tip, col, 2.5f);
         char buf[8];
         snprintf(buf, sizeof(buf), "%d", i + 1);
-        dl->AddText({ c.x + 8.f, c.y - 16.f }, col, buf);
+        dl->AddText({ c.x + 10.f, c.y - 18.f }, col, buf);
+    }
+
+    // ── Live preview while aiming a new checkpoint with the mouse ──────────
+    if (cpPlaceMode_ && cpDragging_)
+    {
+        ImVec2 c = canvasToScreen(cpDragStart_);
+        ImVec2 cur = canvasToScreen(cpDragCur_);
+        ImU32  col = IM_COL32(80, 190, 255, 240);
+
+        float dx = cpDragCur_.x - cpDragStart_.x;
+        float dy = cpDragCur_.y - cpDragStart_.y;
+        bool aimed = (dx * dx + dy * dy >= 64.f);
+        float ang = aimed ? rad2deg(std::atan2(dy, dx)) : cpAngle_;
+
+        float a = deg2rad(ang);
+        ImVec2 tip = canvasToScreen({ cpDragStart_.x + 26.f * std::cos(a),
+                                      cpDragStart_.y + 26.f * std::sin(a) });
+        drawCpArrow(dl, c, tip, col, 3.f);
+        if (aimed)
+            dl->AddLine(c, cur, IM_COL32(80, 190, 255, 110), 1.5f);
+
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.0f deg", ang);
+        dl->AddText({ c.x + 12.f, c.y + 10.f }, col, buf);
     }
 }
 
@@ -741,7 +817,10 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
                     ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             }
             if (ImGui::Button(label, { btnW, 30.f }))
+            {
                 canvas_.tool = t;
+                cpPlaceMode_ = false;   // picking a draw tool leaves cp mode
+            }
             if (active)
                 ImGui::PopStyleColor(2);
         };
@@ -751,6 +830,28 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
     toolBtn("╱  Straight Line", DrawTool::StraightLine);
     toolBtn("▪  Filled Rect", DrawTool::FilledRect);
     toolBtn("○  Circle Border", DrawTool::CircleBorder);
+
+    // Checkpoint placement is a canvas mode like the drawing tools, so it
+    // belongs next to them (it is also on the Stats menu).
+    if (cpPlaceMode_)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, { 0.15f, 0.55f, 0.85f, 1.f });
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.9f, 1.f });
+    }
+    if (ImGui::Button(cpPlaceMode_ ? "◎  Placing... (click to stop)"
+        : "◎  Checkpoint", { btnW, 30.f }))
+    {
+        cpPlaceMode_ = !cpPlaceMode_;
+        if (cpPlaceMode_) statsOpen_ = true;
+    }
+    if (cpPlaceMode_)
+        ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Place a checkpoint with the mouse:\n"
+            "click the canvas for the point, drag out to aim\n"
+            "its direction, release to place.\n"
+            "Right-click a marker deletes it.\n"
+            "Click this button again (or pick a drawing tool) to stop.");
 
     // ── Color ───────────────────────────────────────────────────────────────
     ImGui::Spacing();
@@ -897,19 +998,74 @@ void AppUI::renderCanvasPanel(float panelW, float panelH)
     bool mouseNow = ImGui::IsMouseDown(ImGuiMouseButton_Left) && !splitterActive_;
     ImVec2 mp = ImGui::GetMousePos();
 
-    if (hovered)
+    // ── Checkpoint placement mode ──────────────────────────────────────────
+    // Press = the checkpoint's point, drag = its heading, release = commit.
+    // Drawing is suppressed while this mode is armed so a stray stroke can't
+    // land on the track.
+    if (cpPlaceMode_)
     {
-        sf::Vector2f cp = screenToCanvas(mp);
-        if (mouseNow && !prevMouse_)
-            canvas_.mousePressed(cp);
-        else if (mouseNow && prevMouse_)
-            canvas_.mouseMoved(cp);
+        if (hovered)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+        if (hovered && mouseNow && !cpDragging_)
+        {
+            cpDragging_ = true;
+            cpDragStart_ = screenToCanvas(mp);
+            cpDragCur_ = cpDragStart_;
+        }
+        else if (cpDragging_ && mouseNow)
+        {
+            cpDragCur_ = screenToCanvas(mp);
+        }
+        else if (cpDragging_ && !mouseNow)
+        {
+            cpDragging_ = false;
+            float dx = cpDragCur_.x - cpDragStart_.x;
+            float dy = cpDragCur_.y - cpDragStart_.y;
+            // A click with no meaningful drag keeps the angle already in the
+            // panel field rather than snapping to an arbitrary direction.
+            float ang = (dx * dx + dy * dy >= 64.f)
+                ? rad2deg(std::atan2(dy, dx))
+                : cpAngle_;
+            checkpoints_.push_back({ cpDragStart_.x, cpDragStart_.y, ang });
+            cpX_ = cpDragStart_.x; cpY_ = cpDragStart_.y; cpAngle_ = ang;
+        }
+
+        // Right-click a marker to remove it
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        {
+            sf::Vector2f c = screenToCanvas(mp);
+            for (int i = (int)checkpoints_.size() - 1; i >= 0; --i)
+            {
+                float dx = c.x - checkpoints_[i].x;
+                float dy = c.y - checkpoints_[i].y;
+                if (dx * dx + dy * dy < 18.f * 18.f)
+                {
+                    checkpoints_.erase(checkpoints_.begin() + i);
+                    if (curCp_ >= i) --curCp_;
+                    break;
+                }
+            }
+        }
+
+        prevMouse_ = false;      // never hand this drag to the canvas
     }
+    else
+    {
+        if (hovered)
+        {
+            sf::Vector2f cp = screenToCanvas(mp);
+            if (mouseNow && !prevMouse_)
+                canvas_.mousePressed(cp);
+            else if (mouseNow && prevMouse_)
+                canvas_.mouseMoved(cp);
+        }
 
-    if (!mouseNow && prevMouse_ && canvas_.isDragging())
-        canvas_.mouseReleased(screenToCanvas(mp));
+        if (!mouseNow && prevMouse_ && canvas_.isDragging())
+            canvas_.mouseReleased(screenToCanvas(mp));
 
-    prevMouse_ = mouseNow && hovered;
+        prevMouse_ = mouseNow && hovered;
+    }
 
     // ── Preview overlay for shape tools ────────────────────────────────────
     if (canvas_.isDragging() &&

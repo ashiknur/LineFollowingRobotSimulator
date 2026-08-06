@@ -15,11 +15,20 @@ A full-feature demonstration for the simulator.
 
 The **Stats** menu opens the Run Statistics panel:
 
-- **Checkpoints** — add one by typing X / Y / Angle (or click *Use Robot
-  Pos* to copy the robot's current pose) and pressing *Add Checkpoint*.
-  They draw on the canvas as numbered circles with a heading tick; orange =
-  not yet reached, green = reached. The robot auto-reaches a checkpoint by
-  driving within 40 px of it. The **last checkpoint is the end point**.
+- **Checkpoints — place them with the mouse.** Pick the **Checkpoint** tool
+  in the Drawing Tools panel (or *Stats > Place Checkpoint with Mouse*),
+  then on the canvas **click where the checkpoint goes and drag outward to
+  aim its direction**; an arrow and the live angle follow the cursor, and
+  releasing places it. A click with no drag keeps the angle in the panel
+  field. **Right-click a marker deletes it.** Click the button again — or
+  pick any drawing tool — to leave the mode. Drawing is paused while
+  placing, so a stray stroke can't land on the track.
+- Checkpoints can also be typed exactly as X / Y / Angle in the Stats panel
+  (or click *Use Robot Pos* to capture the robot's current pose) and added
+  with *Add Checkpoint*.
+- Markers draw as numbered circles with a direction arrow; orange = not yet
+  reached, green = reached. The robot auto-reaches a checkpoint by driving
+  within 40 px of it. The **last checkpoint is the end point**.
 - **Skip (Ctrl+K)** teleports to the next checkpoint; **Restart (Ctrl+R)**
   goes back to the last reached one (or the start). Both are counted.
 - A run starts when the sim starts (or *New Run*) and finishes when the
