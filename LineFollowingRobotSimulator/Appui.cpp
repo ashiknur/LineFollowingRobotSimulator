@@ -402,13 +402,19 @@ void AppUI::handleGlobalShortcuts()
             doRestartCp();
     }
 
-    // Esc leaves checkpoint placement mode
-    if (cpPlaceMode_ && !io.WantTextInput &&
-        ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    // Esc leaves checkpoint placement mode.
+    // Read the key from SFML rather than ImGui: ImGui never reports Escape in
+    // this ImGui-SFML build (other keys, e.g. Ctrl+Z, arrive fine), so
+    // IsKeyPressed(ImGuiKey_Escape) would never fire. Edge-detected here
+    // because isKeyPressed() is a level, not an event.
+    bool escNow = window_.hasFocus() &&
+        sf::Keyboard::isKeyPressed(sf::Keyboard::Key::Escape);
+    if (cpPlaceMode_ && escNow && !escPrev_ && !io.WantTextInput)
     {
         cpDragging_ = false;
         cpPlaceMode_ = false;
     }
+    escPrev_ = escNow;
 }
 
 void AppUI::renderReplacePopup()
@@ -649,7 +655,7 @@ void AppUI::renderStatsWindow()
         // ── Mouse placement ───────────────────────────────────────────────
         if (cpPlaceMode_)
             ImGui::PushStyleColor(ImGuiCol_Button, { 0.15f, 0.55f, 0.85f, 1.f });
-        if (ImGui::Button(cpPlaceMode_ ? "Placing... (click to stop)"
+        if (ImGui::Button(cpPlaceMode_ ? "Placing... (Esc to stop)"
             : "Place with Mouse", { 256.f, 0.f }))
             cpPlaceMode_ = !cpPlaceMode_;
         if (cpPlaceMode_)
@@ -658,7 +664,7 @@ void AppUI::renderStatsWindow()
             ImGui::SetTooltip("Click the canvas to drop a checkpoint, then\n"
                 "drag out to aim its direction and release.\n"
                 "Right-click a marker to delete it.\n"
-                "Click again (or pick a drawing tool) to stop.");
+                "Esc, this button, or a drawing tool stops.");
         if (cpPlaceMode_)
             ImGui::TextDisabled("Click = point, drag = direction.\n"
                 "Right-click a marker deletes it.\n"
@@ -838,7 +844,7 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
         ImGui::PushStyleColor(ImGuiCol_Button, { 0.15f, 0.55f, 0.85f, 1.f });
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.2f, 0.6f, 0.9f, 1.f });
     }
-    if (ImGui::Button(cpPlaceMode_ ? "◎  Placing... (click to stop)"
+    if (ImGui::Button(cpPlaceMode_ ? "◎  Placing... (Esc)"
         : "◎  Checkpoint", { btnW, 30.f }))
     {
         cpPlaceMode_ = !cpPlaceMode_;
@@ -851,7 +857,7 @@ void AppUI::renderToolsPanel(float w, float /*h*/)
             "click the canvas for the point, drag out to aim\n"
             "its direction, release to place.\n"
             "Right-click a marker deletes it.\n"
-            "Click this button again (or pick a drawing tool) to stop.");
+            "Esc, this button, or picking a drawing tool stops.");
 
     // ── Color ───────────────────────────────────────────────────────────────
     ImGui::Spacing();

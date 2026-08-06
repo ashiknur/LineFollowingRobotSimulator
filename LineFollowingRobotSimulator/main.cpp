@@ -13,12 +13,26 @@
 #include "config.hpp"
 #include "AppUI.hpp"
 
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#endif
+
 // Defined in UserThread.cpp
 void userThreadFunc(SharedState*, HotReload*);
 
 // ---------------------------------------------------------------------------
 int main()
 {
+#if defined(_WIN32)
+    // Named mutex the installer looks for (AppMutex in LineFollowerSim.iss).
+    // Without it Setup cannot tell the app is running, and Windows refuses to
+    // overwrite the locked exe — an in-place upgrade would silently keep the
+    // old binary. Never closed explicitly: the OS releases it on exit.
+    ::CreateMutexW(nullptr, FALSE, L"LineFollowingRobotSimulatorMutex");
+#endif
+
     // Set up the per-user writable dir (user code, compiled DLLs, imgui.ini)
     paths::ensureUserSources();
 

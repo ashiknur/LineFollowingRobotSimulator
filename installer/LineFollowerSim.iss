@@ -20,7 +20,7 @@
 ;     (full variant only)
 
 #define AppName        "Line Following Robot Simulator"
-#define AppVersion     "1.3.1"
+#define AppVersion     "1.3.2"
 #define AppPublisher   "Ashiknur"
 #define AppExe         "LineFollowingRobotSimulator.exe"
 #define ReleaseDir     "..\LineFollowingRobotSimulator\x64\Release"
@@ -48,6 +48,19 @@ PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\{#AppExe}
 DisableProgramGroupPage=yes
+
+; Upgrading in place over a running copy silently left the OLD exe behind:
+; Windows will not overwrite a locked file and Setup skips it, still exiting
+; 0, so the user believes the update worked. Verified both ways here —
+; Restart Manager alone (CloseApplications) does fix the /FORCECLOSEAPPLICATIONS
+; case, but a plain silent run still reported success while skipping the exe.
+; AppMutex is what makes that impossible: the app creates this mutex at
+; startup, Setup sees it and refuses (asking the user to close the app,
+; and failing with a non-zero exit code when silent) instead of half-updating.
+; Consequence: a silent upgrade must close the app first.
+AppMutex=LineFollowingRobotSimulatorMutex
+CloseApplications=yes
+RestartApplications=yes
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

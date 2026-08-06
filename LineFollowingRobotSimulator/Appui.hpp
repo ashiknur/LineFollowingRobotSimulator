@@ -158,6 +158,7 @@ private:
     // the heading, release to commit. Right-click a marker to delete it.
     bool         cpPlaceMode_ = false;   // armed from the Stats panel/menu
     bool         cpDragging_ = false;   // press-drag in progress
+    bool         escPrev_ = false;      // Esc edge detection (read via SFML)
     sf::Vector2f cpDragStart_{};        // canvas coords of the press
     sf::Vector2f cpDragCur_{};          // canvas coords of the cursor
 
